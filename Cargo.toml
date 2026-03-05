@@ -1,37 +1,32 @@
 [package]
-name = "bullmq_rust"
-version = "0.2.3"
-edition = "2018"
+name = "bullmq-rs"
+version = "0.3.0"
+edition = "2021"
 authors = ["Thomas Bogard <thom.bogard@gmail.com>"]
 license = "MIT OR Apache-2.0"
-description = "A tool to search files"
+description = "A Rust implementation of BullMQ - Redis-based distributed job queue"
 readme = "README.md"
 homepage = "https://github.com/bogardt/bullmq_rust"
 repository = "https://github.com/bogardt/bullmq_rust"
-keywords = ["BullMQ", "Redis", "rust"]
+keywords = ["bullmq", "redis", "queue", "job", "async"]
+categories = ["asynchronous", "database"]
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-dotenv = "0.15"
-redis = { version = "^0.28.2", features = ["tokio-comp", "connection-manager", "json"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+redis = { version = "0.28", features = ["tokio-comp", "connection-manager"] }
 serde = { version = "1.0", features = ["derive"] }
-chrono = "0.4"
 serde_json = "1.0"
-async-trait = "0.1"
-futures = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-dotenv = "0.15"
-redis = "0.28.2"
-serde_json = "1.0"
-chrono = "0.4"
-mockall = { version = "0.13.1" }
+tracing-subscriber = "0.3"
 
-[[bin]]
-name = "queue_trigger"
-path = "src/bin/queue_trigger.rs"
+[[example]]
+name = "basic_queue"
+path = "examples/basic_queue.rs"
 
-[[bin]]
-name = "push_message"
-path = "src/bin/push_message.rs"
+[[example]]
+name = "basic_worker"
+path = "examples/basic_worker.rs"

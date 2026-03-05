@@ -1,0 +1,84 @@
+use bullmq_rs::{JobOptions, QueueBuilder, RedisConnection};
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct Email {
+    to: String,
+    subject: String,
+    body: String,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let conn = RedisConnection::new("redis://127.0.0.1:6379");
+
+    let queue = QueueBuilder::new("emails")
+        .connection(conn)
+        .build::<Email>()
+        .await?;
+
+    // Add a simple job
+    let job = queue
+        .add(
+            "welcome",
+            Email {
+                to: "user@example.com".into(),
+                subject: "Welcome!".into(),
+                body: "Hello and welcome to our platform.".into(),
+            },
+            None,
+        )
+        .await?;
+    println!("Added job: {} (id: {})", job.name, job.id);
+
+    // Add a delayed job
+    let delayed_job = queue
+        .add(
+            "reminder",
+            Email {
+                to: "user@example.com".into(),
+                subject: "Don't forget!".into(),
+                body: "You have pending tasks.".into(),
+            },
+            Some(JobOptions {
+                delay: Some(Duration::from_secs(30)),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    println!(
+        "Added delayed job: {} (id: {}, state: {})",
+        delayed_job.name, delayed_job.id, delayed_job.state
+    );
+
+    // Add a job with retries
+    let retry_job = queue
+        .add(
+            "notification",
+            Email {
+                to: "admin@example.com".into(),
+                subject: "Alert".into(),
+                body: "System alert notification.".into(),
+            },
+            Some(JobOptions {
+                attempts: Some(3),
+                backoff: Some(bullmq_rs::BackoffStrategy::Exponential {
+                    base: Duration::from_secs(1),
+                    max: Duration::from_secs(30),
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    println!(
+        "Added retry job: {} (id: {}, max_attempts: {})",
+        retry_job.name, retry_job.id, retry_job.max_attempts
+    );
+
+    // Get job counts
+    let counts = queue.get_job_counts().await?;
+    println!("\nJob counts: {:?}", counts);
+
+    Ok(())
+}
