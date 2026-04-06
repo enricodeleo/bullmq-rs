@@ -35,8 +35,6 @@ pub(crate) mod scripts;
 
 pub mod queue;
 
-// Worker module is temporarily disabled during the v2 rewrite.
-#[cfg(any())]
 pub mod worker;
 
 pub use connection::RedisConnection;
@@ -44,3 +42,4 @@ pub use error::{BullmqError, BullmqResult};
 pub use job::Job;
 pub use queue::{Queue, QueueBuilder};
 pub use types::{BackoffStrategy, JobOptions, JobState, WorkerOptions};
+pub use worker::{Worker, WorkerBuilder, WorkerHandle};
