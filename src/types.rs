@@ -3,19 +3,29 @@ use std::time::Duration;
 
 /// Lifecycle state of a job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum JobState {
-    Waiting,
+    #[serde(rename = "wait")]
+    Wait,
+    #[serde(rename = "paused")]
+    Paused,
+    #[serde(rename = "waiting-children")]
+    WaitingChildren,
+    #[serde(rename = "delayed")]
     Delayed,
+    #[serde(rename = "active")]
     Active,
+    #[serde(rename = "completed")]
     Completed,
+    #[serde(rename = "failed")]
     Failed,
 }
 
 impl std::fmt::Display for JobState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            JobState::Waiting => write!(f, "waiting"),
+            JobState::Wait => write!(f, "wait"),
+            JobState::Paused => write!(f, "paused"),
+            JobState::WaitingChildren => write!(f, "waiting-children"),
             JobState::Delayed => write!(f, "delayed"),
             JobState::Active => write!(f, "active"),
             JobState::Completed => write!(f, "completed"),
@@ -29,7 +39,9 @@ impl std::str::FromStr for JobState {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "waiting" => Ok(JobState::Waiting),
+            "wait" => Ok(JobState::Wait),
+            "paused" => Ok(JobState::Paused),
+            "waiting-children" => Ok(JobState::WaitingChildren),
             "delayed" => Ok(JobState::Delayed),
             "active" => Ok(JobState::Active),
             "completed" => Ok(JobState::Completed),
@@ -43,7 +55,7 @@ impl std::str::FromStr for JobState {
 #[derive(Debug, Clone, Default)]
 pub struct JobOptions {
     /// Job priority. Lower values = higher priority. Default is 0.
-    pub priority: Option<i32>,
+    pub priority: Option<u32>,
     /// Delay before the job becomes available for processing.
     pub delay: Option<Duration>,
     /// Maximum number of attempts (including the first). Default is 1 (no retry).
@@ -93,15 +105,24 @@ impl BackoffStrategy {
 pub struct WorkerOptions {
     /// Number of jobs to process concurrently. Default is 1.
     pub concurrency: usize,
-    /// How often to poll for new jobs. Default is 1 second.
-    pub poll_interval: Duration,
+    /// Duration a job lock is held before it can be considered stalled. Default is 30s.
+    pub lock_duration: Duration,
+    /// How often to check for stalled jobs. Default is 30s.
+    pub stalled_interval: Duration,
+    /// Maximum number of times a job can be recovered from stalled state. Default is 1.
+    pub max_stalled_count: u32,
+    /// Whether to skip the stalled-job check entirely. Default is false.
+    pub skip_stalled_check: bool,
 }
 
 impl Default for WorkerOptions {
     fn default() -> Self {
         Self {
             concurrency: 1,
-            poll_interval: Duration::from_secs(1),
+            lock_duration: Duration::from_secs(30),
+            stalled_interval: Duration::from_secs(30),
+            max_stalled_count: 1,
+            skip_stalled_check: false,
         }
     }
 }

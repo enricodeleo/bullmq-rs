@@ -1,103 +1,13 @@
 use bullmq_rs::*;
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-struct TestData {
-    message: String,
-    count: u32,
-}
-
-#[test]
-fn test_job_creation_defaults() {
-    let job = bullmq_rs::Job::new(
-        "1".to_string(),
-        "test".to_string(),
-        TestData {
-            message: "hello".into(),
-            count: 42,
-        },
-        None,
-    );
-
-    assert_eq!(job.id, "1");
-    assert_eq!(job.name, "test");
-    assert_eq!(job.state, JobState::Waiting);
-    assert_eq!(job.priority, 0);
-    assert_eq!(job.delay, 0);
-    assert_eq!(job.attempts_made, 0);
-    assert_eq!(job.max_attempts, 1);
-    assert!(job.backoff.is_none());
-    assert!(job.ttl.is_none());
-    assert!(job.progress.is_none());
-    assert!(job.processed_on.is_none());
-    assert!(job.finished_on.is_none());
-    assert!(job.failed_reason.is_none());
-    assert_eq!(job.data.message, "hello");
-    assert_eq!(job.data.count, 42);
-}
-
-#[test]
-fn test_job_creation_with_options() {
-    let opts = JobOptions {
-        priority: Some(5),
-        delay: Some(Duration::from_secs(10)),
-        attempts: Some(3),
-        backoff: Some(BackoffStrategy::Fixed {
-            delay: Duration::from_secs(2),
-        }),
-        ttl: Some(Duration::from_secs(3600)),
-        job_id: Some("custom-id".into()),
-    };
-
-    let job = bullmq_rs::Job::new(
-        "custom-id".to_string(),
-        "important".to_string(),
-        TestData {
-            message: "urgent".into(),
-            count: 1,
-        },
-        Some(opts),
-    );
-
-    assert_eq!(job.id, "custom-id");
-    assert_eq!(job.state, JobState::Delayed); // has delay
-    assert_eq!(job.priority, 5);
-    assert_eq!(job.delay, 10_000); // 10 seconds in ms
-    assert_eq!(job.max_attempts, 3);
-    assert!(job.backoff.is_some());
-    assert_eq!(job.ttl, Some(3_600_000)); // 1 hour in ms
-}
-
-#[test]
-fn test_job_serialization_roundtrip() {
-    let job = bullmq_rs::Job::new(
-        "1".to_string(),
-        "test".to_string(),
-        TestData {
-            message: "hello".into(),
-            count: 42,
-        },
-        None,
-    );
-
-    let hash = job.to_redis_hash().unwrap();
-    let map: std::collections::HashMap<String, String> = hash.into_iter().collect();
-
-    let restored: bullmq_rs::Job<TestData> =
-        bullmq_rs::Job::from_redis_hash("1", &map).unwrap();
-
-    assert_eq!(restored.id, "1");
-    assert_eq!(restored.name, "test");
-    assert_eq!(restored.data, job.data);
-    assert_eq!(restored.state, JobState::Waiting);
-    assert_eq!(restored.priority, 0);
-    assert_eq!(restored.max_attempts, 1);
-}
+// ---------------------------------------------------------------------------
+// JobState tests
+// ---------------------------------------------------------------------------
 
 #[test]
 fn test_job_state_display() {
-    assert_eq!(JobState::Waiting.to_string(), "waiting");
+    assert_eq!(JobState::Wait.to_string(), "wait");
     assert_eq!(JobState::Delayed.to_string(), "delayed");
     assert_eq!(JobState::Active.to_string(), "active");
     assert_eq!(JobState::Completed.to_string(), "completed");
@@ -106,7 +16,7 @@ fn test_job_state_display() {
 
 #[test]
 fn test_job_state_parse() {
-    assert_eq!("waiting".parse::<JobState>().unwrap(), JobState::Waiting);
+    assert_eq!("wait".parse::<JobState>().unwrap(), JobState::Wait);
     assert_eq!("delayed".parse::<JobState>().unwrap(), JobState::Delayed);
     assert_eq!("active".parse::<JobState>().unwrap(), JobState::Active);
     assert_eq!(
@@ -116,6 +26,47 @@ fn test_job_state_parse() {
     assert_eq!("failed".parse::<JobState>().unwrap(), JobState::Failed);
     assert!("invalid".parse::<JobState>().is_err());
 }
+
+#[test]
+fn test_job_state_wait_variant() {
+    // Wait
+    assert_eq!(JobState::Wait.to_string(), "wait");
+    assert_eq!("wait".parse::<JobState>().unwrap(), JobState::Wait);
+
+    // Paused
+    assert_eq!(JobState::Paused.to_string(), "paused");
+    assert_eq!("paused".parse::<JobState>().unwrap(), JobState::Paused);
+
+    // WaitingChildren
+    assert_eq!(JobState::WaitingChildren.to_string(), "waiting-children");
+    assert_eq!(
+        "waiting-children".parse::<JobState>().unwrap(),
+        JobState::WaitingChildren
+    );
+}
+
+#[test]
+fn test_job_state_serde_roundtrip() {
+    let states = vec![
+        (JobState::Wait, "\"wait\""),
+        (JobState::Paused, "\"paused\""),
+        (JobState::WaitingChildren, "\"waiting-children\""),
+        (JobState::Delayed, "\"delayed\""),
+        (JobState::Active, "\"active\""),
+        (JobState::Completed, "\"completed\""),
+        (JobState::Failed, "\"failed\""),
+    ];
+    for (state, expected_json) in states {
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(json, expected_json, "serializing {:?}", state);
+        let restored: JobState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, state, "deserializing {:?}", state);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Backoff tests
+// ---------------------------------------------------------------------------
 
 #[test]
 fn test_backoff_fixed() {
@@ -142,6 +93,23 @@ fn test_backoff_exponential() {
 }
 
 #[test]
+fn test_backoff_strategy_serialization() {
+    let strategy = BackoffStrategy::Exponential {
+        base: Duration::from_secs(1),
+        max: Duration::from_secs(60),
+    };
+    let json = serde_json::to_string(&strategy).unwrap();
+    let restored: BackoffStrategy = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(restored.delay_for_attempt(0), Duration::from_secs(1));
+    assert_eq!(restored.delay_for_attempt(5), Duration::from_secs(32));
+}
+
+// ---------------------------------------------------------------------------
+// JobOptions tests
+// ---------------------------------------------------------------------------
+
+#[test]
 fn test_job_options_default() {
     let opts = JobOptions::default();
     assert!(opts.priority.is_none());
@@ -153,11 +121,38 @@ fn test_job_options_default() {
 }
 
 #[test]
-fn test_worker_options_default() {
+fn test_job_options_u32_priority() {
+    let opts = JobOptions {
+        priority: Some(42u32),
+        ..Default::default()
+    };
+    assert_eq!(opts.priority, Some(42u32));
+
+    // Ensure u32 max is representable
+    let opts_max = JobOptions {
+        priority: Some(u32::MAX),
+        ..Default::default()
+    };
+    assert_eq!(opts_max.priority, Some(u32::MAX));
+}
+
+// ---------------------------------------------------------------------------
+// WorkerOptions tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_worker_options_v2_defaults() {
     let opts = WorkerOptions::default();
     assert_eq!(opts.concurrency, 1);
-    assert_eq!(opts.poll_interval, Duration::from_secs(1));
+    assert_eq!(opts.lock_duration, Duration::from_secs(30));
+    assert_eq!(opts.stalled_interval, Duration::from_secs(30));
+    assert_eq!(opts.max_stalled_count, 1);
+    assert!(!opts.skip_stalled_check);
 }
+
+// ---------------------------------------------------------------------------
+// RedisConnection tests
+// ---------------------------------------------------------------------------
 
 #[test]
 fn test_redis_connection_default() {
@@ -170,6 +165,10 @@ fn test_redis_connection_custom() {
     let conn = RedisConnection::new("redis://myhost:6380/1");
     assert_eq!(conn.url(), "redis://myhost:6380/1");
 }
+
+// ---------------------------------------------------------------------------
+// Error tests
+// ---------------------------------------------------------------------------
 
 #[test]
 fn test_error_display() {
@@ -186,7 +185,7 @@ fn test_error_display() {
 #[test]
 fn test_error_from_redis() {
     let redis_err = redis::RedisError::from((
-        redis::ErrorKind::IoError,
+        redis::ErrorKind::Io,
         "connection refused",
     ));
     let err: BullmqError = redis_err.into();
@@ -195,14 +194,19 @@ fn test_error_from_redis() {
 }
 
 #[test]
-fn test_backoff_strategy_serialization() {
-    let strategy = BackoffStrategy::Exponential {
-        base: Duration::from_secs(1),
-        max: Duration::from_secs(60),
-    };
-    let json = serde_json::to_string(&strategy).unwrap();
-    let restored: BackoffStrategy = serde_json::from_str(&json).unwrap();
+fn test_error_new_variants() {
+    let err = BullmqError::LockMismatch;
+    assert_eq!(
+        err.to_string(),
+        "Lock token mismatch: job was stalled and recovered"
+    );
 
-    assert_eq!(restored.delay_for_attempt(0), Duration::from_secs(1));
-    assert_eq!(restored.delay_for_attempt(5), Duration::from_secs(32));
+    let err = BullmqError::QueuePaused;
+    assert_eq!(err.to_string(), "Queue is paused");
+
+    let err = BullmqError::ScriptError("NOSCRIPT No matching script".into());
+    assert_eq!(
+        err.to_string(),
+        "Script error: NOSCRIPT No matching script"
+    );
 }

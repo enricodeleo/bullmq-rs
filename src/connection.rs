@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use redis::aio::ConnectionManager;
 use redis::aio::ConnectionManagerConfig;
 
@@ -30,7 +32,8 @@ impl RedisConnection {
     /// Create a `ConnectionManager` for resilient Redis connections.
     pub(crate) async fn get_manager(&self) -> BullmqResult<ConnectionManager> {
         let client = redis::Client::open(self.url.as_str())?;
-        let config = ConnectionManagerConfig::new().set_max_delay(5_000);
+        let config =
+            ConnectionManagerConfig::new().set_max_delay(Duration::from_millis(5_000));
         let manager = ConnectionManager::new_with_config(client, config).await?;
         Ok(manager)
     }

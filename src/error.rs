@@ -11,6 +11,12 @@ pub enum BullmqError {
     JobNotFound(String),
     /// Worker has been shut down.
     WorkerClosed,
+    /// Lock token mismatch (job was stalled and recovered by another worker).
+    LockMismatch,
+    /// Queue is paused.
+    QueuePaused,
+    /// Lua script error.
+    ScriptError(String),
     /// Generic error.
     Other(String),
 }
@@ -22,6 +28,11 @@ impl fmt::Display for BullmqError {
             BullmqError::Serialization(e) => write!(f, "Serialization error: {}", e),
             BullmqError::JobNotFound(id) => write!(f, "Job not found: {}", id),
             BullmqError::WorkerClosed => write!(f, "Worker has been shut down"),
+            BullmqError::LockMismatch => {
+                write!(f, "Lock token mismatch: job was stalled and recovered")
+            }
+            BullmqError::QueuePaused => write!(f, "Queue is paused"),
+            BullmqError::ScriptError(msg) => write!(f, "Script error: {}", msg),
             BullmqError::Other(msg) => write!(f, "{}", msg),
         }
     }

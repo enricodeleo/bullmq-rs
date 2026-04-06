@@ -7,7 +7,7 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use bullmq_rs::{Queue, QueueBuilder, Worker, WorkerBuilder, RedisConnection, JobOptions};
+//! use bullmq_rs::{RedisConnection, JobOptions};
 //! use serde::{Serialize, Deserialize};
 //! use std::time::Duration;
 //!
@@ -21,49 +21,24 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let conn = RedisConnection::new("redis://127.0.0.1:6379");
-//!
-//!     // Create a typed queue
-//!     let queue: Queue<Email> = QueueBuilder::new("emails")
-//!         .connection(conn.clone())
-//!         .build()
-//!         .await?;
-//!
-//!     // Add a job
-//!     queue.add("welcome", Email {
-//!         to: "user@example.com".into(),
-//!         subject: "Welcome!".into(),
-//!         body: "Hello and welcome.".into(),
-//!     }, None).await?;
-//!
-//!     // Create a worker to process jobs
-//!     let worker: Worker<Email> = WorkerBuilder::new("emails")
-//!         .connection(conn)
-//!         .concurrency(3)
-//!         .build()
-//!         .await?;
-//!
-//!     let handle = worker.start(|job| async move {
-//!         println!("Sending email to {}", job.data.to);
-//!         Ok(())
-//!     }).await?;
-//!
-//!     // Graceful shutdown
-//!     handle.shutdown();
-//!     handle.wait().await?;
+//!     // Queue, Worker, and Job APIs are being rewritten for v2 wire compatibility.
 //!     Ok(())
 //! }
 //! ```
 
 pub mod connection;
 pub mod error;
-pub mod job;
-pub mod queue;
 pub mod types;
+
+// These modules are temporarily disabled during the v2 rewrite.
+// They depend on chrono and old type signatures that are being replaced.
+#[cfg(any())]
+pub mod job;
+#[cfg(any())]
+pub mod queue;
+#[cfg(any())]
 pub mod worker;
 
 pub use connection::RedisConnection;
 pub use error::{BullmqError, BullmqResult};
-pub use job::Job;
-pub use queue::{Queue, QueueBuilder};
 pub use types::{BackoffStrategy, JobOptions, JobState, WorkerOptions};
-pub use worker::{Worker, WorkerBuilder, WorkerHandle};
