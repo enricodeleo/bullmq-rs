@@ -148,15 +148,15 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
 
                         // Fetch job data from hash
                         let job_key = format!("{}:{}:{}", prefix, name, job_id);
-                        let map: HashMap<String, String> =
-                            match conn_clone.hgetall(&job_key).await {
-                                Ok(m) => m,
-                                Err(e) => {
-                                    tracing::error!("Failed to fetch job {}: {}", job_id, e);
-                                    drop(permit);
-                                    continue;
-                                }
-                            };
+                        let map: HashMap<String, String> = match conn_clone.hgetall(&job_key).await
+                        {
+                            Ok(m) => m,
+                            Err(e) => {
+                                tracing::error!("Failed to fetch job {}: {}", job_id, e);
+                                drop(permit);
+                                continue;
+                            }
+                        };
 
                         if map.is_empty() {
                             tracing::warn!("Job {} hash is empty, skipping", job_id);
@@ -185,7 +185,7 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                             .arg(&job_key)
                             .arg("state")
                             .arg("active")
-                            .arg("processed_on")
+                            .arg("processedOn")
                             .arg(Utc::now().timestamp_millis().to_string())
                             .query_async::<()>(&mut conn_clone)
                             .await;
@@ -200,26 +200,19 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
 
                         tokio::spawn(async move {
                             let _permit = permit;
-                            let job_key =
-                                format!("{}:{}:{}", task_prefix, task_name, job.id);
+                            let job_key = format!("{}:{}:{}", task_prefix, task_name, job.id);
 
                             match handler(job.clone()).await {
                                 Ok(()) => {
                                     // Move to completed
                                     let now = Utc::now();
                                     let _ = redis::cmd("SREM")
-                                        .arg(format!(
-                                            "{}:{}:active",
-                                            task_prefix, task_name
-                                        ))
+                                        .arg(format!("{}:{}:active", task_prefix, task_name))
                                         .arg(&job.id)
                                         .query_async::<()>(&mut task_conn)
                                         .await;
                                     let _ = redis::cmd("ZADD")
-                                        .arg(format!(
-                                            "{}:{}:completed",
-                                            task_prefix, task_name
-                                        ))
+                                        .arg(format!("{}:{}:completed", task_prefix, task_name))
                                         .arg(now.timestamp_millis())
                                         .arg(&job.id)
                                         .query_async::<()>(&mut task_conn)
@@ -228,7 +221,7 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                         .arg(&job_key)
                                         .arg("state")
                                         .arg("completed")
-                                        .arg("finished_on")
+                                        .arg("finishedOn")
                                         .arg(now.timestamp_millis().to_string())
                                         .query_async::<()>(&mut task_conn)
                                         .await;
@@ -246,10 +239,7 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
 
                                     // Remove from active
                                     let _ = redis::cmd("SREM")
-                                        .arg(format!(
-                                            "{}:{}:active",
-                                            task_prefix, task_name
-                                        ))
+                                        .arg(format!("{}:{}:active", task_prefix, task_name))
                                         .arg(&job.id)
                                         .query_async::<()>(&mut task_conn)
                                         .await;
@@ -269,15 +259,14 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                             .arg(&job_key)
                                             .arg("state")
                                             .arg("delayed")
-                                            .arg("attempts_made")
+                                            .arg("atm")
                                             .arg(attempts)
+                                            .arg("delay")
+                                            .arg(backoff_delay.as_millis() as u64)
                                             .query_async::<()>(&mut task_conn)
                                             .await;
                                         let _ = redis::cmd("ZADD")
-                                            .arg(format!(
-                                                "{}:{}:delayed",
-                                                task_prefix, task_name
-                                            ))
+                                            .arg(format!("{}:{}:delayed", task_prefix, task_name))
                                             .arg(process_at)
                                             .arg(&job.id)
                                             .query_async::<()>(&mut task_conn)
@@ -295,10 +284,7 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                         // Max attempts reached, move to failed
                                         let now = Utc::now();
                                         let _ = redis::cmd("ZADD")
-                                            .arg(format!(
-                                                "{}:{}:failed",
-                                                task_prefix, task_name
-                                            ))
+                                            .arg(format!("{}:{}:failed", task_prefix, task_name))
                                             .arg(now.timestamp_millis())
                                             .arg(&job.id)
                                             .query_async::<()>(&mut task_conn)
@@ -307,11 +293,11 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                             .arg(&job_key)
                                             .arg("state")
                                             .arg("failed")
-                                            .arg("finished_on")
+                                            .arg("finishedOn")
                                             .arg(now.timestamp_millis().to_string())
-                                            .arg("failed_reason")
+                                            .arg("failedReason")
                                             .arg(err.to_string())
-                                            .arg("attempts_made")
+                                            .arg("atm")
                                             .arg(attempts)
                                             .query_async::<()>(&mut task_conn)
                                             .await;
