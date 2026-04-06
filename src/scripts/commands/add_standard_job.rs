@@ -1,1 +1,48 @@
-// TODO: Implement in Task 5+
+use redis::aio::ConnectionManager;
+
+use crate::error::BullmqResult;
+use crate::scripts::ScriptLoader;
+
+use super::key;
+
+/// Add a standard (non-prioritized, non-delayed) job to the queue.
+///
+/// Returns the job ID on success.
+pub(crate) async fn add_standard_job(
+    loader: &ScriptLoader,
+    conn: &mut ConnectionManager,
+    prefix: &str,
+    queue_name: &str,
+    job_id: &str,
+    name: &str,
+    data: &str,
+    timestamp: u64,
+    opts_json: &str,
+    max_events: u64,
+) -> BullmqResult<String> {
+    let keys = vec![
+        key(prefix, queue_name, "wait"),
+        key(prefix, queue_name, "meta"),
+        key(prefix, queue_name, "id"),
+        key(prefix, queue_name, "events"),
+        key(prefix, queue_name, "marker"),
+        key(prefix, queue_name, "stalled"),
+        format!("{}:{}:{}", prefix, queue_name, job_id),
+        key(prefix, queue_name, "active"),
+        key(prefix, queue_name, "completed"),
+    ];
+    let args: Vec<Vec<u8>> = vec![
+        name.as_bytes().to_vec(),
+        data.as_bytes().to_vec(),
+        timestamp.to_string().into_bytes(),
+        job_id.as_bytes().to_vec(),
+        opts_json.as_bytes().to_vec(),
+        max_events.to_string().into_bytes(),
+    ];
+    let result = loader.invoke("addStandardJob", conn, &keys, &args).await?;
+    match result {
+        redis::Value::BulkString(bytes) => Ok(String::from_utf8_lossy(&bytes).to_string()),
+        redis::Value::SimpleString(s) => Ok(s),
+        _ => Ok(job_id.to_string()),
+    }
+}
