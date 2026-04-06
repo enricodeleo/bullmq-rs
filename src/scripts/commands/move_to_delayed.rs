@@ -6,6 +6,7 @@ use crate::scripts::ScriptLoader;
 use super::key;
 
 /// Move an active job back to the delayed state.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn move_to_delayed(
     loader: &ScriptLoader,
     conn: &mut ConnectionManager,

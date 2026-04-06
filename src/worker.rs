@@ -11,6 +11,11 @@ use tokio::sync::{watch, Mutex, Semaphore};
 use crate::connection::RedisConnection;
 use crate::error::{BullmqError, BullmqResult};
 use crate::job::Job;
+
+/// Type alias for the on_completed callback.
+type CompletedCallback = Arc<dyn Fn(&Job<serde_json::Value>) + Send + Sync>;
+/// Type alias for the on_failed callback.
+type FailedCallback = Arc<dyn Fn(&Job<serde_json::Value>, &BullmqError) + Send + Sync>;
 use crate::scripts::commands::{extend_lock, move_stalled_jobs_to_wait, move_to_active, move_to_delayed, move_to_finished};
 use crate::scripts::ScriptLoader;
 use crate::types::WorkerOptions;
@@ -54,8 +59,8 @@ pub struct Worker<T> {
     conn: RedisConnection,
     scripts: Arc<ScriptLoader>,
     options: WorkerOptions,
-    on_completed: Option<Arc<dyn Fn(&Job<serde_json::Value>) + Send + Sync>>,
-    on_failed: Option<Arc<dyn Fn(&Job<serde_json::Value>, &BullmqError) + Send + Sync>>,
+    on_completed: Option<CompletedCallback>,
+    on_failed: Option<FailedCallback>,
     _phantom: PhantomData<T>,
 }
 
@@ -631,8 +636,8 @@ pub struct WorkerBuilder {
     connection: RedisConnection,
     prefix: String,
     options: WorkerOptions,
-    on_completed: Option<Arc<dyn Fn(&Job<serde_json::Value>) + Send + Sync>>,
-    on_failed: Option<Arc<dyn Fn(&Job<serde_json::Value>, &BullmqError) + Send + Sync>>,
+    on_completed: Option<CompletedCallback>,
+    on_failed: Option<FailedCallback>,
 }
 
 impl WorkerBuilder {

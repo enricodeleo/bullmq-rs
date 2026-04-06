@@ -8,6 +8,7 @@ use super::key;
 /// Add a delayed job to the queue.
 ///
 /// Returns the job ID on success.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn add_delayed_job(
     loader: &ScriptLoader,
     conn: &mut ConnectionManager,

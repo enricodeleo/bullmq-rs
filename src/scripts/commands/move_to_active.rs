@@ -19,6 +19,7 @@ pub(crate) struct MoveToActiveResult {
 /// Move the next waiting/prioritized job to active state, acquiring a lock.
 ///
 /// Returns the job ID and all hash fields on success, or `None` if no job available.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn move_to_active(
     loader: &ScriptLoader,
     conn: &mut ConnectionManager,

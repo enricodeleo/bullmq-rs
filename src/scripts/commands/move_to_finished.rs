@@ -79,9 +79,7 @@ pub(crate) async fn move_to_finished(
                 Ok(MoveToFinishedResult::Done)
             } else if code == -1 {
                 Err(BullmqError::JobNotFound(job_id.to_string()))
-            } else if code == -2 {
-                Err(BullmqError::LockMismatch)
-            } else if code == -6 {
+            } else if code == -2 || code == -6 {
                 Err(BullmqError::LockMismatch)
             } else {
                 Err(BullmqError::ScriptError(format!(

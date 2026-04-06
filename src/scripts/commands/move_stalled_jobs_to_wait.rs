@@ -15,6 +15,7 @@ pub(crate) struct StalledJobsResult {
 }
 
 /// Check for stalled jobs and move them back to wait or fail them.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn move_stalled_jobs_to_wait(
     loader: &ScriptLoader,
     conn: &mut ConnectionManager,

@@ -9,6 +9,7 @@ use super::key;
 ///
 /// `push_cmd` should be `"RPUSH"` (retried jobs go to the back) or `"LPUSH"`.
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub(crate) async fn retry_job(
     loader: &ScriptLoader,
     conn: &mut ConnectionManager,
