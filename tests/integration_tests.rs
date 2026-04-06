@@ -170,10 +170,7 @@ async fn test_worker_processes_job() {
         .await
         .unwrap();
 
-    let handle = worker
-        .start(|_job| async move { Ok(()) })
-        .await
-        .unwrap();
+    let handle = worker.start(|_job| async move { Ok(()) }).await.unwrap();
 
     // Wait for processing
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -225,9 +222,7 @@ async fn test_worker_retry_then_fail() {
         .unwrap();
 
     let handle = worker
-        .start(|_job| async move {
-            Err(BullmqError::Other("intentional failure".into()))
-        })
+        .start(|_job| async move { Err(BullmqError::Other("intentional failure".into())) })
         .await
         .unwrap();
 

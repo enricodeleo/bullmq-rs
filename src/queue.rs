@@ -44,12 +44,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Queue<T> {
     /// Add a job to the queue.
     ///
     /// Returns the created job with its assigned ID.
-    pub async fn add(
-        &self,
-        name: &str,
-        data: T,
-        opts: Option<JobOptions>,
-    ) -> BullmqResult<Job<T>> {
+    pub async fn add(&self, name: &str, data: T, opts: Option<JobOptions>) -> BullmqResult<Job<T>> {
         let mut conn = self.conn.clone();
 
         // Generate job ID
