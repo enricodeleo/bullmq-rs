@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::connection::RedisConnection;
 use crate::error::{BullmqError, BullmqResult};
-use crate::job::Job;
+use crate::job::{Job, JobContext};
 use crate::scripts::commands::{
     add_delayed_job, add_log, add_prioritized_job, add_standard_job, pause,
 };
@@ -50,6 +50,16 @@ pub struct Queue<T> {
 }
 
 impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Queue<T> {
+    /// Build a JobContext from this queue's connection info.
+    fn job_context(&self) -> Arc<JobContext> {
+        Arc::new(JobContext {
+            conn: self.conn.clone(),
+            scripts: self.scripts.clone(),
+            prefix: self.prefix.clone(),
+            queue_name: self.name.clone(),
+        })
+    }
+
     /// Add a job to the queue.
     ///
     /// Dispatches to the appropriate Lua script based on job options:
@@ -133,6 +143,9 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Queue<T> {
             .await?;
         }
 
+        let mut job = job;
+        job.ctx = Some(self.job_context());
+
         Ok(job)
     }
 
@@ -146,7 +159,8 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Queue<T> {
             return Ok(None);
         }
 
-        let job = Job::from_redis_hash(job_id, &map)?;
+        let mut job = Job::from_redis_hash(job_id, &map)?;
+        job.ctx = Some(self.job_context());
         Ok(Some(job))
     }
 
