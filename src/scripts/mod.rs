@@ -60,6 +60,7 @@ impl ScriptLoader {
         register!("pause", "pause-7.lua");
         register!("addLog", "addLog-2.lua");
         register!("changePriority", "changePriority-7.lua");
+        register!("promote", "promote-9.lua");
 
         Self { scripts }
     }
@@ -160,6 +161,7 @@ mod tests {
         assert!(loader.scripts.contains_key("pause"));
         assert!(loader.scripts.contains_key("addLog"));
         assert!(loader.scripts.contains_key("changePriority"));
-        assert_eq!(loader.scripts.len(), 12);
+        assert!(loader.scripts.contains_key("promote"));
+        assert_eq!(loader.scripts.len(), 13);
     }
 }

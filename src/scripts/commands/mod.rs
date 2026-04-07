@@ -10,6 +10,7 @@ pub(crate) mod extend_lock;
 pub(crate) mod pause;
 pub(crate) mod add_log;
 pub(crate) mod change_priority;
+pub(crate) mod promote;
 
 /// Build a Redis key: `{prefix}:{queue_name}:{suffix}`.
 pub(crate) fn key(prefix: &str, queue_name: &str, suffix: &str) -> String {
