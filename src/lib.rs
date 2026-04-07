@@ -65,6 +65,7 @@ pub(crate) mod scripts;
 
 pub mod queue;
 pub mod queue_events;
+pub mod queue_events_producer;
 
 pub mod worker;
 
@@ -73,5 +74,6 @@ pub use error::{BullmqError, BullmqResult};
 pub use job::Job;
 pub use queue::{Queue, QueueBuilder};
 pub use queue_events::{QueueEvent, QueueEvents, QueueEventsBuilder};
+pub use queue_events_producer::{QueueEventsProducer, QueueEventsProducerBuilder};
 pub use types::{BackoffStrategy, JobOptions, JobState, WorkerOptions};
 pub use worker::{Worker, WorkerBuilder, WorkerHandle};
