@@ -1,9 +1,13 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use redis::aio::ConnectionManager;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{BullmqError, BullmqResult};
+use crate::scripts::ScriptLoader;
+use crate::scripts::commands::key as build_key;
 use crate::types::{JobOptions, JobState};
 
 /// Returns the current time as milliseconds since the Unix epoch.
@@ -12,6 +16,24 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64
+}
+
+/// Connection context injected by Queue/Worker. Enables active-handle methods
+/// on Job instances (update_progress, log, change_delay, etc.).
+pub(crate) struct JobContext {
+    pub conn: ConnectionManager,
+    pub scripts: Arc<ScriptLoader>,
+    pub prefix: String,
+    pub queue_name: String,
+}
+
+impl std::fmt::Debug for JobContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobContext")
+            .field("prefix", &self.prefix)
+            .field("queue_name", &self.queue_name)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A job with a typed data payload.
@@ -58,6 +80,12 @@ pub struct Job<T> {
     pub return_value: Option<serde_json::Value>,
     /// Identifier of the worker that processed this job. Maps to "pb" in the Redis hash.
     pub processed_by: Option<String>,
+    /// Connection context injected by Queue/Worker. None for manually-created jobs.
+    #[serde(skip)]
+    pub(crate) ctx: Option<Arc<JobContext>>,
+    /// Lock token assigned by the worker. Used by active-handle methods.
+    #[serde(skip)]
+    pub(crate) lock_token: Option<String>,
 }
 
 impl<T: Serialize + DeserializeOwned> Job<T> {
@@ -88,6 +116,8 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
             stacktrace: Vec::new(),
             return_value: None,
             processed_by: None,
+            ctx: None,
+            lock_token: None,
         }
     }
 
@@ -238,6 +268,23 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
             stacktrace,
             return_value,
             processed_by,
+            ctx: None,
+            lock_token: None,
         })
+    }
+
+    /// Get the connection context, or error if this job was created without one.
+    fn ctx(&self) -> BullmqResult<&JobContext> {
+        self.ctx.as_ref().map(|arc| arc.as_ref()).ok_or_else(|| {
+            BullmqError::Other(
+                "Job has no connection context (created outside a Queue/Worker)".into(),
+            )
+        })
+    }
+
+    /// Build a Redis key for this job's queue.
+    fn queue_key(&self, suffix: &str) -> BullmqResult<String> {
+        let ctx = self.ctx()?;
+        Ok(build_key(&ctx.prefix, &ctx.queue_name, suffix))
     }
 }

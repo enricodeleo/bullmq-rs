@@ -679,6 +679,8 @@ fn convert_job_to_value<T: Serialize>(job: &Job<T>) -> BullmqResult<Job<serde_js
         stacktrace: job.stacktrace.clone(),
         return_value: job.return_value.clone(),
         processed_by: job.processed_by.clone(),
+        ctx: None,
+        lock_token: None,
     })
 }
 
