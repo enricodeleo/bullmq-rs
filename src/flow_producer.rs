@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::connection::RedisConnection;
 use crate::error::{BullmqError, BullmqResult};
-use crate::job::Job;
+use crate::job::{Job, JobContext};
 use crate::scripts::commands::add_delayed_job::add_delayed_job_with_parent;
 use crate::scripts::commands::add_parent_job::add_parent_job;
 use crate::scripts::commands::add_prioritized_job::add_prioritized_job_with_parent;
@@ -106,12 +106,27 @@ impl FlowProducer {
             last_id - auto_id_count as i64 + 1
         };
 
-        let prepared = prepare_node(job, &root_prefix, &root_queue, &self.prefix, None, &mut next_auto_id)?;
+        let mut seen_job_keys = std::collections::HashSet::new();
+        let prepared = prepare_node(
+            job,
+            &root_prefix,
+            &root_queue,
+            &self.prefix,
+            None,
+            &mut next_auto_id,
+            &mut seen_job_keys,
+        )?;
+        ensure_job_keys_do_not_exist(&mut conn, &prepared).await?;
 
-        redis::cmd("MULTI")
-            .query_async::<redis::Value>(&mut conn)
-            .await?;
-        queue_insert(&self.scripts, &mut conn, &prepared).await?;
+        redis::cmd("MULTI").query_async::<redis::Value>(&mut conn).await?;
+        let queue_result = queue_insert(&self.scripts, &mut conn, &prepared).await;
+        if let Err(err) = queue_result {
+            let _ = redis::cmd("DISCARD")
+                .query_async::<redis::Value>(&mut conn)
+                .await;
+            return Err(err);
+        }
+
         let exec_result: redis::Value = redis::cmd("EXEC").query_async(&mut conn).await?;
         if matches!(exec_result, redis::Value::Nil) {
             return Err(BullmqError::Other(
@@ -119,7 +134,11 @@ impl FlowProducer {
             ));
         }
 
-        Ok(build_flow_node(prepared, self.scripts.clone()))
+        Ok(build_flow_node(
+            prepared,
+            conn.clone(),
+            self.scripts.clone(),
+        ))
     }
 }
 
@@ -172,11 +191,15 @@ struct PreparedNode<T> {
     queue_name: String,
     prefix: String,
     data: T,
+    data_json: String,
     opts: JobOptions,
+    opts_json: String,
     timestamp: u64,
     job_key: String,
     parent_key: Option<String>,
     parent_data: Option<String>,
+    delay_ms: u64,
+    priority: u32,
     children: Vec<PreparedNode<T>>,
 }
 
@@ -187,6 +210,7 @@ fn prepare_node<T>(
     default_prefix: &str,
     parent: Option<(String, String)>,
     next_auto_id: &mut i64,
+    seen_job_keys: &mut std::collections::HashSet<String>,
 ) -> BullmqResult<PreparedNode<T>>
 where
     T: Serialize + DeserializeOwned + Send + Sync + 'static,
@@ -209,10 +233,20 @@ where
     };
     let timestamp = now_ms();
     let job_key = key(&prefix, &job.queue_name, &id);
+    if !seen_job_keys.insert(job_key.clone()) {
+        return Err(BullmqError::Other(format!(
+            "Job key '{}' is duplicated within the flow",
+            job_key
+        )));
+    }
     let parent_descriptor = serde_json::to_string(&json!({
         "id": id,
         "queue": format!("{}:{}", prefix, job.queue_name),
     }))?;
+    let data_json = serde_json::to_string(&job.data)?;
+    let opts_json = serde_json::to_string(&opts)?;
+    let delay_ms = opts.delay.map(|d| d.as_millis() as u64).unwrap_or(0);
+    let priority = opts.priority.unwrap_or(0);
 
     let children = job
         .children
@@ -225,6 +259,7 @@ where
                 default_prefix,
                 Some((job_key.clone(), parent_descriptor.clone())),
                 next_auto_id,
+                seen_job_keys,
             )
         })
         .collect::<BullmqResult<Vec<_>>>()?;
@@ -240,13 +275,46 @@ where
         queue_name: job.queue_name,
         prefix,
         data: job.data,
+        data_json,
         opts,
+        opts_json,
         timestamp,
         job_key,
         parent_key,
         parent_data,
+        delay_ms,
+        priority,
         children,
     })
+}
+
+async fn ensure_job_keys_do_not_exist<T>(
+    conn: &mut redis::aio::ConnectionManager,
+    node: &PreparedNode<T>,
+) -> BullmqResult<()> {
+    let exists: bool = redis::cmd("EXISTS")
+        .arg(&node.job_key)
+        .query_async(conn)
+        .await?;
+    if exists {
+        return Err(BullmqError::Other(format!(
+            "Job '{}' already exists",
+            node.job_key
+        )));
+    }
+
+    for child in &node.children {
+        queue_insert_existing_check(conn, child).await?;
+    }
+
+    Ok(())
+}
+
+fn queue_insert_existing_check<'a, T>(
+    conn: &'a mut redis::aio::ConnectionManager,
+    node: &'a PreparedNode<T>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = BullmqResult<()>> + 'a>> {
+    Box::pin(async move { ensure_job_keys_do_not_exist(conn, node).await })
 }
 
 fn queue_insert<'a, T>(
@@ -258,18 +326,13 @@ where
     T: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     Box::pin(async move {
-        let data_json = serde_json::to_string(&node.data)?;
-        let opts_json = serde_json::to_string(&node.opts)?;
-
         if node.children.is_empty() {
             let parent = node
                 .parent_key
                 .as_deref()
                 .zip(node.parent_data.as_deref());
-            let delay = node.opts.delay.map(|d| d.as_millis() as u64).unwrap_or(0);
-            let priority = node.opts.priority.unwrap_or(0);
 
-            if delay > 0 {
+            if node.delay_ms > 0 {
                 add_delayed_job_with_parent(
                     scripts,
                     conn,
@@ -277,15 +340,15 @@ where
                     &node.queue_name,
                     &node.id,
                     &node.name,
-                    &data_json,
+                    &node.data_json,
                     node.timestamp,
-                    &opts_json,
+                    &node.opts_json,
                     DEFAULT_MAX_EVENTS,
-                    node.timestamp + delay,
+                    node.timestamp + node.delay_ms,
                     parent,
                 )
                 .await?;
-            } else if priority > 0 {
+            } else if node.priority > 0 {
                 add_prioritized_job_with_parent(
                     scripts,
                     conn,
@@ -293,9 +356,9 @@ where
                     &node.queue_name,
                     &node.id,
                     &node.name,
-                    &data_json,
+                    &node.data_json,
                     node.timestamp,
-                    &opts_json,
+                    &node.opts_json,
                     DEFAULT_MAX_EVENTS,
                     parent,
                 )
@@ -308,9 +371,9 @@ where
                     &node.queue_name,
                     &node.id,
                     &node.name,
-                    &data_json,
+                    &node.data_json,
                     node.timestamp,
-                    &opts_json,
+                    &node.opts_json,
                     DEFAULT_MAX_EVENTS,
                     parent,
                 )
@@ -349,9 +412,9 @@ where
             &node.queue_name,
             &node.id,
             &node.name,
-            &data_json,
+            &node.data_json,
             node.timestamp,
-            &opts_json,
+            &node.opts_json,
             DEFAULT_MAX_EVENTS,
             parent_ref,
         )
@@ -374,7 +437,11 @@ where
     })
 }
 
-fn build_flow_node<T>(node: PreparedNode<T>, scripts: Arc<ScriptLoader>) -> FlowNode<T>
+fn build_flow_node<T>(
+    node: PreparedNode<T>,
+    conn: redis::aio::ConnectionManager,
+    scripts: Arc<ScriptLoader>,
+) -> FlowNode<T>
 where
     T: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
@@ -394,11 +461,17 @@ where
     } else {
         JobState::Wait
     };
+    job.ctx = Some(Arc::new(JobContext {
+        conn: conn.clone(),
+        scripts: scripts.clone(),
+        prefix: node.prefix.clone(),
+        queue_name: node.queue_name.clone(),
+    }));
 
     let children = node
         .children
         .into_iter()
-        .map(|child| build_flow_node(child, scripts.clone()))
+        .map(|child| build_flow_node(child, conn.clone(), scripts.clone()))
         .collect();
 
     FlowNode { job, children }

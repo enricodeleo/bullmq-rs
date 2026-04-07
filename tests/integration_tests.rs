@@ -1411,6 +1411,98 @@ async fn test_flow_add_same_queue_parent_enters_waiting_children() {
         .await
         .unwrap();
     assert_eq!(parent_meta.0.as_deref(), Some(parent_key.as_str()));
+
+    let parent_json: serde_json::Value =
+        serde_json::from_str(parent_meta.1.as_deref().unwrap()).unwrap();
+    assert_eq!(parent_json["id"], node.job.id);
+    assert_eq!(parent_json["queue"], format!("bull:{qname}"));
+
+    let mut child_job = node.children[0].job.clone();
+    child_job
+        .update_progress(serde_json::json!({ "step": 1 }))
+        .await
+        .unwrap();
+
+    let progress: String = redis::cmd("HGET")
+        .arg(format!("bull:{}:{}", qname, node.children[0].job.id))
+        .arg("progress")
+        .query_async(&mut raw)
+        .await
+        .unwrap();
+    assert_eq!(progress, r#"{"step":1}"#);
+}
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_flow_add_rejects_existing_custom_child_id() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    let queue = QueueBuilder::new(&qname)
+        .connection(conn.clone())
+        .build::<TestJob>()
+        .await
+        .unwrap();
+    let producer = FlowProducerBuilder::new()
+        .connection(conn.clone())
+        .build()
+        .await
+        .unwrap();
+
+    let existing_child_id = "existing-child-id".to_string();
+    queue
+        .add(
+            "existing",
+            TestJob {
+                value: "already-there".into(),
+            },
+            Some(JobOptions {
+                job_id: Some(existing_child_id.clone()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+    let flow = FlowJob {
+        name: "parent".into(),
+        queue_name: qname.clone(),
+        data: TestJob {
+            value: "parent".into(),
+        },
+        prefix: None,
+        opts: None,
+        children: vec![FlowJob {
+            name: "child".into(),
+            queue_name: qname.clone(),
+            data: TestJob {
+                value: "child".into(),
+            },
+            prefix: None,
+            opts: Some(JobOptions {
+                job_id: Some(existing_child_id.clone()),
+                ..Default::default()
+            }),
+            children: vec![],
+        }],
+    };
+
+    let err = producer.add(flow).await.unwrap_err();
+    assert!(
+        err.to_string().contains("already exists"),
+        "unexpected error: {err}"
+    );
+
+    assert_eq!(queue.get_waiting_children_count().await.unwrap(), 0);
+    assert_eq!(queue.get_waiting_count().await.unwrap(), 1);
+
+    let mut raw = raw_redis_conn().await;
+    let parent_keys: Vec<String> = redis::cmd("KEYS")
+        .arg(format!("bull:{qname}:*:dependencies"))
+        .query_async(&mut raw)
+        .await
+        .unwrap();
+    assert!(parent_keys.is_empty());
 }
 
 // ---------------------------------------------------------------------------
