@@ -88,8 +88,6 @@ rcall("XADD", eventsKey, "MAXLEN", "~", maxEvents, "*",
       "event", "waiting", "jobId", jobId, "prev", "failed")
 
 -- 8. Signal workers
-if not isPaused then
-  addBaseMarkerIfNeeded(markerKey)
-end
+addBaseMarkerIfNeeded(markerKey, isPaused)
 
 return 0

@@ -296,6 +296,15 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
         let job_key = self.queue_key(&self.id)?;
         let events_key = self.queue_key("events")?;
 
+        // Check job still exists to avoid creating orphan hashes
+        let exists: bool = redis::cmd("EXISTS")
+            .arg(&job_key)
+            .query_async(&mut conn)
+            .await?;
+        if !exists {
+            return Err(BullmqError::JobNotFound(self.id.clone()));
+        }
+
         let progress_json = serde_json::to_string(&progress)?;
 
         redis::cmd("HSET")
@@ -590,6 +599,7 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
 
         self.priority = priority;
         self.opts.priority = if priority > 0 { Some(priority) } else { None };
+        self.state = if priority > 0 { JobState::Prioritized } else { JobState::Wait };
         Ok(())
     }
 
