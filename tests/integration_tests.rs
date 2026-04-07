@@ -23,6 +23,16 @@ async fn raw_redis_conn() -> redis::aio::ConnectionManager {
     redis::aio::ConnectionManager::new(client).await.unwrap()
 }
 
+/// Helper: generate a unique queue name for tests that need isolation.
+fn unique_queue_name() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    format!("test_unique_{}", nanos)
+}
+
 // ---------------------------------------------------------------------------
 // 1. test_queue_add_and_get_job
 // ---------------------------------------------------------------------------
@@ -745,7 +755,54 @@ async fn test_job_clear_logs() {
 }
 
 // ---------------------------------------------------------------------------
-// 15. test_concurrent_workers
+// 15. test_job_get_state
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_job_get_state() {
+    let queue = QueueBuilder::new(&unique_queue_name())
+        .connection(redis_conn())
+        .build::<String>()
+        .await
+        .unwrap();
+
+    let mut job = queue.add("test", "data".to_string(), None).await.unwrap();
+    let state = job.get_state().await.unwrap();
+    assert_eq!(state, JobState::Wait);
+    assert!(job.is_waiting().await.unwrap());
+    assert!(!job.is_completed().await.unwrap());
+
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 16. test_job_get_state_delayed
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_job_get_state_delayed() {
+    let queue = QueueBuilder::new(&unique_queue_name())
+        .connection(redis_conn())
+        .build::<String>()
+        .await
+        .unwrap();
+
+    let opts = JobOptions {
+        delay: Some(Duration::from_secs(3600)),
+        ..Default::default()
+    };
+    let mut job = queue.add("test", "data".to_string(), Some(opts)).await.unwrap();
+    let state = job.get_state().await.unwrap();
+    assert_eq!(state, JobState::Delayed);
+    assert!(job.is_delayed().await.unwrap());
+
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 17. test_concurrent_workers
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

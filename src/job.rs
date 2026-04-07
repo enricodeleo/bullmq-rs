@@ -374,4 +374,111 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
 
         Ok(())
     }
+
+    /// Query Redis to determine the current state of this job.
+    ///
+    /// Checks key membership in BullMQ order: completed, failed, delayed,
+    /// active, wait, paused, prioritized, waiting-children.
+    /// Lists use LPOS (O(N), Redis 6.0.6+), sorted sets use ZSCORE (O(log N)).
+    pub async fn get_state(&mut self) -> BullmqResult<JobState> {
+        let ctx = self.ctx()?;
+        let mut conn = ctx.conn.clone();
+        let job_id = self.id.clone();
+
+        // Sorted sets: use ZSCORE
+        let checks_zset: &[(JobState, &str)] = &[
+            (JobState::Completed, "completed"),
+            (JobState::Failed, "failed"),
+            (JobState::Delayed, "delayed"),
+        ];
+        for (state, suffix) in checks_zset {
+            let key = build_key(&ctx.prefix, &ctx.queue_name, suffix);
+            let score: Option<f64> = redis::cmd("ZSCORE")
+                .arg(&key)
+                .arg(&job_id)
+                .query_async(&mut conn)
+                .await?;
+            if score.is_some() {
+                self.state = *state;
+                return Ok(*state);
+            }
+        }
+
+        // Lists: use LPOS (Redis 6.0.6+)
+        let checks_list: &[(JobState, &str)] = &[
+            (JobState::Active, "active"),
+            (JobState::Wait, "wait"),
+            (JobState::Paused, "paused"),
+        ];
+        for (state, suffix) in checks_list {
+            let key = build_key(&ctx.prefix, &ctx.queue_name, suffix);
+            let pos: redis::Value = redis::cmd("LPOS")
+                .arg(&key)
+                .arg(&job_id)
+                .query_async(&mut conn)
+                .await?;
+            if !matches!(pos, redis::Value::Nil) {
+                self.state = *state;
+                return Ok(*state);
+            }
+        }
+
+        // Sorted set: prioritized
+        {
+            let key = build_key(&ctx.prefix, &ctx.queue_name, "prioritized");
+            let score: Option<f64> = redis::cmd("ZSCORE")
+                .arg(&key)
+                .arg(&job_id)
+                .query_async(&mut conn)
+                .await?;
+            if score.is_some() {
+                self.state = JobState::Prioritized;
+                return Ok(JobState::Prioritized);
+            }
+        }
+
+        // Sorted set: waiting-children
+        {
+            let key = build_key(&ctx.prefix, &ctx.queue_name, "waiting-children");
+            let score: Option<f64> = redis::cmd("ZSCORE")
+                .arg(&key)
+                .arg(&job_id)
+                .query_async(&mut conn)
+                .await?;
+            if score.is_some() {
+                self.state = JobState::WaitingChildren;
+                return Ok(JobState::WaitingChildren);
+            }
+        }
+
+        Err(BullmqError::JobNotFound(self.id.clone()))
+    }
+
+    pub async fn is_completed(&mut self) -> BullmqResult<bool> {
+        Ok(self.get_state().await? == JobState::Completed)
+    }
+
+    pub async fn is_failed(&mut self) -> BullmqResult<bool> {
+        Ok(self.get_state().await? == JobState::Failed)
+    }
+
+    pub async fn is_delayed(&mut self) -> BullmqResult<bool> {
+        Ok(self.get_state().await? == JobState::Delayed)
+    }
+
+    pub async fn is_active(&mut self) -> BullmqResult<bool> {
+        Ok(self.get_state().await? == JobState::Active)
+    }
+
+    pub async fn is_waiting(&mut self) -> BullmqResult<bool> {
+        Ok(self.get_state().await? == JobState::Wait)
+    }
+
+    pub async fn is_paused(&mut self) -> BullmqResult<bool> {
+        Ok(self.get_state().await? == JobState::Paused)
+    }
+
+    pub async fn is_prioritized(&mut self) -> BullmqResult<bool> {
+        Ok(self.get_state().await? == JobState::Prioritized)
+    }
 }
