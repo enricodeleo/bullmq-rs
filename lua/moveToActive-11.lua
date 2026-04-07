@@ -98,6 +98,13 @@ rcall("XADD", eventsKey, "MAXLEN", "~", maxEvents, "*",
 -- Remove marker since we consumed a job
 rcall("ZREM", markerKey, "0")
 
+-- Re-add marker if there are still jobs waiting
+local waitLen = rcall("LLEN", waitKey)
+local priLen = rcall("ZCARD", prioritizedKey)
+if waitLen > 0 or priLen > 0 then
+  addBaseMarkerIfNeeded(markerKey, false)
+end
+
 -- Return job ID and all hash fields
 local jobData = rcall("HGETALL", jobKey)
 local result = {jobId}

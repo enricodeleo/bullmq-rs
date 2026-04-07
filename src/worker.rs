@@ -251,6 +251,15 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                 let mut cmd_conn = cmd_conn;
                 let marker_key = format!("{}:{}:marker", prefix, name);
 
+                // Bootstrap: add a marker so BZPOPMIN picks up pre-existing jobs.
+                // Idempotent — if "0" already exists, score is unchanged.
+                let _: redis::RedisResult<i64> = redis::cmd("ZADD")
+                    .arg(&marker_key)
+                    .arg(0i64)
+                    .arg("0")
+                    .query_async(&mut cmd_conn)
+                    .await;
+
                 loop {
                     // Check for shutdown.
                     if *shutdown_rx.borrow() {
@@ -402,8 +411,28 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                 }
                             }
                             None => {
-                                // Timeout, no marker appeared. Continue the loop.
-                                continue;
+                                // Timeout — try moveToActive as recovery.
+                                // Handles lost markers (Redis failover, manual deletion, etc.)
+                                let timestamp = now_ms();
+                                match move_to_active::move_to_active(
+                                    &scripts,
+                                    &mut cmd_conn,
+                                    &prefix,
+                                    &name,
+                                    &token,
+                                    lock_duration_ms,
+                                    timestamp,
+                                    DEFAULT_MAX_EVENTS,
+                                )
+                                .await
+                                {
+                                    Ok(result) if result.job_id.is_some() => Some(result),
+                                    Ok(_) => { continue; }
+                                    Err(e) => {
+                                        tracing::debug!("moveToActive recovery check: {}", e);
+                                        continue;
+                                    }
+                                }
                             }
                         }
                     };

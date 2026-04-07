@@ -148,6 +148,13 @@ if fetchNext == 1 then
 
   rcall("ZREM", markerKey, "0")
 
+  -- Re-add marker if there are still jobs waiting
+  local waitLen = rcall("LLEN", waitKey)
+  local priLen = rcall("ZCARD", prioritizedKey)
+  if waitLen > 0 or priLen > 0 then
+    addBaseMarkerIfNeeded(markerKey, false)
+  end
+
   local nextJobData = rcall("HGETALL", nextJobKey)
   local result = {nextJobId}
   for i, v in ipairs(nextJobData) do

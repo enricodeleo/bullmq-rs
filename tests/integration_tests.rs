@@ -1019,3 +1019,160 @@ async fn test_job_remove() {
 
     queue.drain().await.unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// 22. test_worker_processes_preexisting_jobs
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_worker_processes_preexisting_jobs() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    // Add 10 jobs BEFORE starting the worker
+    let queue = QueueBuilder::new(&qname)
+        .connection(conn.clone())
+        .build::<TestJob>()
+        .await
+        .unwrap();
+
+    for i in 0..10 {
+        queue
+            .add(
+                "preexist",
+                TestJob {
+                    value: format!("job-{}", i),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    // Verify all 10 are in wait
+    let counts = queue.get_job_counts().await.unwrap();
+    assert_eq!(*counts.get(&JobState::Wait).unwrap_or(&0), 10);
+
+    // Now start the worker
+    let completed = Arc::new(Mutex::new(0u32));
+    let completed_clone = completed.clone();
+
+    let worker = WorkerBuilder::new(&qname)
+        .connection(conn.clone())
+        .concurrency(1)
+        .build::<TestJob>();
+
+    let handle = worker
+        .start(move |_job| {
+            let completed = completed_clone.clone();
+            async move {
+                let mut c = completed.lock().await;
+                *c += 1;
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+    // Wait for all jobs to be processed (max 30 seconds)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let c = *completed.lock().await;
+        if c >= 10 {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            let c = *completed.lock().await;
+            panic!(
+                "Timed out waiting for pre-existing jobs: only {}/10 completed",
+                c
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    handle.shutdown();
+    handle.wait().await.unwrap();
+
+    let final_count = *completed.lock().await;
+    assert_eq!(final_count, 10);
+
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 23. test_worker_continuous_processing_no_stall
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_worker_continuous_processing_no_stall() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    let queue = QueueBuilder::new(&qname)
+        .connection(conn.clone())
+        .build::<TestJob>()
+        .await
+        .unwrap();
+
+    // Add 20 jobs
+    for i in 0..20 {
+        queue
+            .add(
+                "continuous",
+                TestJob {
+                    value: format!("job-{}", i),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    let completed = Arc::new(Mutex::new(0u32));
+    let completed_clone = completed.clone();
+
+    let worker = WorkerBuilder::new(&qname)
+        .connection(conn.clone())
+        .concurrency(1) // single concurrency to test sequential marker re-add
+        .build::<TestJob>();
+
+    let handle = worker
+        .start(move |_job| {
+            let completed = completed_clone.clone();
+            async move {
+                let mut c = completed.lock().await;
+                *c += 1;
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+    // Wait for all 20 jobs (max 30 seconds)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let c = *completed.lock().await;
+        if c >= 20 {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            let c = *completed.lock().await;
+            panic!(
+                "Timed out: only {}/20 completed — worker likely stalled after first job",
+                c
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    handle.shutdown();
+    handle.wait().await.unwrap();
+
+    let final_count = *completed.lock().await;
+    assert_eq!(final_count, 20);
+
+    queue.drain().await.unwrap();
+}
