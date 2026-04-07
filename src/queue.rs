@@ -201,6 +201,10 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Queue<T> {
             .arg(self.key("failed"))
             .query_async(&mut conn)
             .await?;
+        let waiting_children: u64 = redis::cmd("ZCARD")
+            .arg(self.key("waiting-children"))
+            .query_async(&mut conn)
+            .await?;
 
         counts.insert(JobState::Wait, wait);
         counts.insert(JobState::Paused, paused);
@@ -209,6 +213,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Queue<T> {
         counts.insert(JobState::Delayed, delayed);
         counts.insert(JobState::Completed, completed);
         counts.insert(JobState::Failed, failed);
+        counts.insert(JobState::WaitingChildren, waiting_children);
 
         Ok(counts)
     }
