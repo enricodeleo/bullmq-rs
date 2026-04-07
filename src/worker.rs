@@ -10,7 +10,7 @@ use tokio::sync::{watch, Mutex, Semaphore};
 
 use crate::connection::RedisConnection;
 use crate::error::{BullmqError, BullmqResult};
-use crate::job::Job;
+use crate::job::{Job, JobContext};
 
 /// Type alias for the on_completed callback.
 type CompletedCallback = Arc<dyn Fn(&Job<serde_json::Value>) + Send + Sync>;
@@ -412,13 +412,24 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                     if let Some(result) = move_result {
                         if let Some(job_id) = result.job_id {
                             // Deserialize the job from the hash data returned by moveToActive.
-                            let job: Job<T> = match Job::from_redis_hash(&job_id, &result.job_data) {
+                            let mut job: Job<T> = match Job::from_redis_hash(&job_id, &result.job_data) {
                                 Ok(j) => j,
                                 Err(e) => {
                                     tracing::error!("Failed to deserialize job {}: {}", job_id, e);
                                     continue;
                                 }
                             };
+
+                            // Inject connection context, lock token, and active state
+                            // for active-handle methods.
+                            job.ctx = Some(Arc::new(JobContext {
+                                conn: cmd_conn.clone(),
+                                scripts: scripts.clone(),
+                                prefix: prefix.clone(),
+                                queue_name: name.clone(),
+                            }));
+                            job.lock_token = Some(token.clone());
+                            job.state = crate::types::JobState::Active;
 
                             // Acquire a semaphore permit (may block if at concurrency limit).
                             let permit = tokio::select! {
