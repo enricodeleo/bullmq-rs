@@ -64,6 +64,7 @@ pub mod job;
 pub(crate) mod scripts;
 
 pub mod queue;
+pub mod queue_events;
 
 pub mod worker;
 
@@ -71,5 +72,6 @@ pub use connection::RedisConnection;
 pub use error::{BullmqError, BullmqResult};
 pub use job::Job;
 pub use queue::{Queue, QueueBuilder};
+pub use queue_events::QueueEvent;
 pub use types::{BackoffStrategy, JobOptions, JobState, WorkerOptions};
 pub use worker::{Worker, WorkerBuilder, WorkerHandle};

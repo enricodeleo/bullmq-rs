@@ -530,3 +530,170 @@ fn test_error_new_variants() {
         "Script error: NOSCRIPT No matching script"
     );
 }
+
+// ---------------------------------------------------------------------------
+// QueueEvent parsing tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_parse_event_completed() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "completed".into());
+    fields.insert("jobId".into(), "42".into());
+    fields.insert("returnvalue".into(), r#"{"result":"ok"}"#.into());
+    fields.insert("prev".into(), "active".into());
+
+    let event = bullmq_rs::QueueEvent::parse(&fields);
+    match event {
+        bullmq_rs::QueueEvent::Completed { job_id, return_value } => {
+            assert_eq!(job_id, "42");
+            assert_eq!(return_value, serde_json::json!({"result": "ok"}));
+        }
+        _ => panic!("Expected Completed, got {:?}", event),
+    }
+}
+
+#[test]
+fn test_parse_event_failed() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "failed".into());
+    fields.insert("jobId".into(), "7".into());
+    fields.insert("failedReason".into(), "timeout".into());
+
+    let event = bullmq_rs::QueueEvent::parse(&fields);
+    match event {
+        bullmq_rs::QueueEvent::Failed { job_id, reason } => {
+            assert_eq!(job_id, "7");
+            assert_eq!(reason, "timeout");
+        }
+        _ => panic!("Expected Failed, got {:?}", event),
+    }
+}
+
+#[test]
+fn test_parse_event_waiting_with_empty_prev() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "waiting".into());
+    fields.insert("jobId".into(), "1".into());
+    fields.insert("prev".into(), "".into());
+
+    let event = bullmq_rs::QueueEvent::parse(&fields);
+    match event {
+        bullmq_rs::QueueEvent::Waiting { job_id, prev } => {
+            assert_eq!(job_id, "1");
+            assert_eq!(prev, None);
+        }
+        _ => panic!("Expected Waiting, got {:?}", event),
+    }
+}
+
+#[test]
+fn test_parse_event_paused() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "paused".into());
+    assert_eq!(bullmq_rs::QueueEvent::parse(&fields), bullmq_rs::QueueEvent::Paused);
+}
+
+#[test]
+fn test_parse_event_resumed() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "resumed".into());
+    assert_eq!(bullmq_rs::QueueEvent::parse(&fields), bullmq_rs::QueueEvent::Resumed);
+}
+
+#[test]
+fn test_parse_event_drained() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "drained".into());
+    assert_eq!(bullmq_rs::QueueEvent::parse(&fields), bullmq_rs::QueueEvent::Drained);
+}
+
+#[test]
+fn test_parse_event_unknown() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "custom_thing".into());
+    fields.insert("foo".into(), "bar".into());
+
+    let event = bullmq_rs::QueueEvent::parse(&fields);
+    match event {
+        bullmq_rs::QueueEvent::Unknown { event, fields } => {
+            assert_eq!(event, "custom_thing");
+            assert_eq!(fields.get("foo").unwrap(), "bar");
+        }
+        _ => panic!("Expected Unknown, got {:?}", event),
+    }
+}
+
+#[test]
+fn test_parse_event_completed_invalid_json() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "completed".into());
+    fields.insert("jobId".into(), "1".into());
+    fields.insert("returnvalue".into(), "not valid json".into());
+
+    let event = bullmq_rs::QueueEvent::parse(&fields);
+    match event {
+        bullmq_rs::QueueEvent::Completed { return_value, .. } => {
+            assert_eq!(return_value, serde_json::Value::Null);
+        }
+        _ => panic!("Expected Completed, got {:?}", event),
+    }
+}
+
+#[test]
+fn test_parse_event_delayed() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "delayed".into());
+    fields.insert("jobId".into(), "5".into());
+    fields.insert("delay".into(), "1712534400000".into());
+
+    let event = bullmq_rs::QueueEvent::parse(&fields);
+    match event {
+        bullmq_rs::QueueEvent::Delayed { job_id, delay } => {
+            assert_eq!(job_id, "5");
+            assert_eq!(delay, 1712534400000);
+        }
+        _ => panic!("Expected Delayed, got {:?}", event),
+    }
+}
+
+#[test]
+fn test_parse_event_progress() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "progress".into());
+    fields.insert("jobId".into(), "3".into());
+    fields.insert("data".into(), r#"{"percent":50}"#.into());
+
+    let event = bullmq_rs::QueueEvent::parse(&fields);
+    match event {
+        bullmq_rs::QueueEvent::Progress { job_id, data } => {
+            assert_eq!(job_id, "3");
+            assert_eq!(data, serde_json::json!({"percent": 50}));
+        }
+        _ => panic!("Expected Progress, got {:?}", event),
+    }
+}
+
+#[test]
+fn test_parse_event_stalled() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "stalled".into());
+    fields.insert("jobId".into(), "9".into());
+
+    match bullmq_rs::QueueEvent::parse(&fields) {
+        bullmq_rs::QueueEvent::Stalled { job_id } => assert_eq!(job_id, "9"),
+        other => panic!("Expected Stalled, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_event_waiting_children() {
+    let mut fields = std::collections::HashMap::new();
+    fields.insert("event".into(), "waiting-children".into());
+    fields.insert("jobId".into(), "11".into());
+
+    match bullmq_rs::QueueEvent::parse(&fields) {
+        bullmq_rs::QueueEvent::WaitingChildren { job_id } => assert_eq!(job_id, "11"),
+        other => panic!("Expected WaitingChildren, got {:?}", other),
+    }
+}
