@@ -1102,6 +1102,201 @@ async fn test_worker_processes_preexisting_jobs() {
 }
 
 // ---------------------------------------------------------------------------
+// 24. test_queue_events_basic_flow
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_queue_events_basic_flow() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    // Start QueueEvents with last_event_id "0" to get all events from the beginning
+    let mut qe = QueueEventsBuilder::new(&qname)
+        .connection(conn.clone())
+        .last_event_id("0")
+        .blocking_timeout(2_000)
+        .build()
+        .await
+        .unwrap();
+
+    let mut rx = qe.subscribe();
+
+    // Add a job
+    let queue = QueueBuilder::new(&qname)
+        .connection(conn.clone())
+        .build::<TestJob>()
+        .await
+        .unwrap();
+
+    queue
+        .add("test_job", TestJob { value: "hello".into() }, None)
+        .await
+        .unwrap();
+
+    // Start a worker to process it
+    let worker = WorkerBuilder::new(&qname)
+        .connection(conn.clone())
+        .concurrency(1)
+        .build::<TestJob>();
+
+    let handle = worker
+        .start(|_job| async move { Ok(()) })
+        .await
+        .unwrap();
+
+    // Collect events until we see Completed (max 10s)
+    let mut events = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok((event, _stream_id)) => {
+                        events.push(event);
+                        if events.iter().any(|e| matches!(e, QueueEvent::Completed { .. })) {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                panic!("Timed out waiting for events. Got: {:?}", events);
+            }
+        }
+    }
+
+    // Verify we got the key lifecycle events
+    assert!(events.iter().any(|e| matches!(e, QueueEvent::Added { .. })));
+    assert!(events.iter().any(|e| matches!(e, QueueEvent::Waiting { .. })));
+    assert!(events.iter().any(|e| matches!(e, QueueEvent::Active { .. })));
+    assert!(events.iter().any(|e| matches!(e, QueueEvent::Completed { .. })));
+
+    handle.shutdown();
+    handle.wait().await.unwrap();
+    qe.close().await.unwrap();
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 25. test_queue_events_producer
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_queue_events_producer() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    let mut qe = QueueEventsBuilder::new(&qname)
+        .connection(conn.clone())
+        .last_event_id("0")
+        .blocking_timeout(2_000)
+        .build()
+        .await
+        .unwrap();
+
+    let mut rx = qe.subscribe();
+
+    let producer = QueueEventsProducerBuilder::new(&qname)
+        .connection(conn.clone())
+        .build()
+        .await
+        .unwrap();
+
+    producer
+        .publish("my_custom_event", &[("jobId", "99"), ("status", "exported")])
+        .await
+        .unwrap();
+
+    // Wait for the custom event
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok((QueueEvent::Unknown { event, fields }, _)) => {
+                        assert_eq!(event, "my_custom_event");
+                        assert_eq!(fields.get("jobId").unwrap(), "99");
+                        assert_eq!(fields.get("status").unwrap(), "exported");
+                        break;
+                    }
+                    Ok(_) => continue,
+                    Err(_) => panic!("Channel closed"),
+                }
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                panic!("Timed out waiting for custom event");
+            }
+        }
+    }
+
+    qe.close().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 26. test_queue_events_multiple_subscribers
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_queue_events_multiple_subscribers() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    let mut qe = QueueEventsBuilder::new(&qname)
+        .connection(conn.clone())
+        .last_event_id("0")
+        .blocking_timeout(2_000)
+        .build()
+        .await
+        .unwrap();
+
+    let mut rx1 = qe.subscribe();
+    let mut rx2 = qe.subscribe();
+
+    let producer = QueueEventsProducerBuilder::new(&qname)
+        .connection(conn.clone())
+        .build()
+        .await
+        .unwrap();
+
+    producer
+        .publish("test_event", &[("data", "hello")])
+        .await
+        .unwrap();
+
+    let timeout = Duration::from_secs(5);
+    let (e1, _) = tokio::time::timeout(timeout, rx1.recv()).await.unwrap().unwrap();
+    let (e2, _) = tokio::time::timeout(timeout, rx2.recv()).await.unwrap().unwrap();
+
+    assert_eq!(e1, e2);
+
+    qe.close().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 27. test_queue_events_shutdown
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_queue_events_shutdown() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    let mut qe = QueueEventsBuilder::new(&qname)
+        .connection(conn)
+        .blocking_timeout(2_000)
+        .build()
+        .await
+        .unwrap();
+
+    qe.close().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
 // 23. test_worker_continuous_processing_no_stall
 // ---------------------------------------------------------------------------
 
