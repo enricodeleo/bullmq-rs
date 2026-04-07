@@ -633,7 +633,119 @@ async fn test_events_stream() {
 }
 
 // ---------------------------------------------------------------------------
-// 11. test_concurrent_workers
+// 11. test_job_update_progress
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_job_update_progress() {
+    let queue = QueueBuilder::new("test_update_progress_v2")
+        .connection(redis_conn())
+        .build::<String>()
+        .await
+        .unwrap();
+
+    queue.drain().await.unwrap();
+
+    let mut job = queue.add("test", "data".to_string(), None).await.unwrap();
+
+    let progress = serde_json::json!({"percent": 50});
+    job.update_progress(progress.clone()).await.unwrap();
+
+    // Verify local state updated
+    assert_eq!(job.progress, Some(progress.clone()));
+
+    // Verify Redis state updated
+    let fetched = queue.get_job(&job.id).await.unwrap().unwrap();
+    assert_eq!(fetched.progress, Some(progress));
+
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 12. test_job_log
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_job_log() {
+    let queue = QueueBuilder::new("test_job_log_v2")
+        .connection(redis_conn())
+        .build::<String>()
+        .await
+        .unwrap();
+
+    queue.drain().await.unwrap();
+
+    let job = queue.add("test", "data".to_string(), None).await.unwrap();
+
+    let count = job.log("first log").await.unwrap();
+    assert_eq!(count, 1);
+    let count = job.log("second log").await.unwrap();
+    assert_eq!(count, 2);
+
+    let logs = queue.get_logs(&job.id, 0, -1).await.unwrap();
+    assert_eq!(logs, vec!["first log", "second log"]);
+
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 13. test_job_update_data
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_job_update_data() {
+    let queue = QueueBuilder::new("test_update_data_v2")
+        .connection(redis_conn())
+        .build::<String>()
+        .await
+        .unwrap();
+
+    queue.drain().await.unwrap();
+
+    let mut job = queue.add("test", "original".to_string(), None).await.unwrap();
+
+    job.update_data("updated".to_string()).await.unwrap();
+
+    assert_eq!(job.data, "updated");
+
+    let fetched = queue.get_job(&job.id).await.unwrap().unwrap();
+    assert_eq!(fetched.data, "updated");
+
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 14. test_job_clear_logs
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_job_clear_logs() {
+    let queue = QueueBuilder::new("test_clear_logs_v2")
+        .connection(redis_conn())
+        .build::<String>()
+        .await
+        .unwrap();
+
+    queue.drain().await.unwrap();
+
+    let job = queue.add("test", "data".to_string(), None).await.unwrap();
+    job.log("entry 1").await.unwrap();
+    job.log("entry 2").await.unwrap();
+
+    job.clear_logs().await.unwrap();
+
+    let logs = queue.get_logs(&job.id, 0, -1).await.unwrap();
+    assert!(logs.is_empty());
+
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 15. test_concurrent_workers
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

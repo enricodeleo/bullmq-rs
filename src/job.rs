@@ -287,4 +287,91 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
         let ctx = self.ctx()?;
         Ok(build_key(&ctx.prefix, &ctx.queue_name, suffix))
     }
+
+    /// Update the job's progress in Redis and locally.
+    pub async fn update_progress(&mut self, progress: serde_json::Value) -> BullmqResult<()> {
+        let ctx = self.ctx()?;
+        let mut conn = ctx.conn.clone();
+        let job_key = self.queue_key(&self.id)?;
+        let events_key = self.queue_key("events")?;
+
+        let progress_json = serde_json::to_string(&progress)?;
+
+        redis::cmd("HSET")
+            .arg(&job_key)
+            .arg("progress")
+            .arg(&progress_json)
+            .query_async::<i64>(&mut conn)
+            .await?;
+
+        redis::cmd("XADD")
+            .arg(&events_key)
+            .arg("MAXLEN")
+            .arg("~")
+            .arg(10_000u64)
+            .arg("*")
+            .arg("event")
+            .arg("progress")
+            .arg("jobId")
+            .arg(&self.id)
+            .arg("data")
+            .arg(&progress_json)
+            .query_async::<String>(&mut conn)
+            .await?;
+
+        self.progress = Some(progress);
+        Ok(())
+    }
+
+    /// Append a log line to this job's log list in Redis.
+    ///
+    /// Returns the total log count after insertion.
+    pub async fn log(&self, row: &str) -> BullmqResult<u64> {
+        let ctx = self.ctx()?;
+        let mut conn = ctx.conn.clone();
+        crate::scripts::commands::add_log::add_log(
+            &ctx.scripts,
+            &mut conn,
+            &ctx.prefix,
+            &ctx.queue_name,
+            &self.id,
+            row,
+            0,
+        )
+        .await
+    }
+
+    /// Update the job's data payload in Redis and locally.
+    pub async fn update_data(&mut self, data: T) -> BullmqResult<()> {
+        let ctx = self.ctx()?;
+        let mut conn = ctx.conn.clone();
+        let job_key = self.queue_key(&self.id)?;
+
+        let data_json = serde_json::to_string(&data)?;
+
+        redis::cmd("HSET")
+            .arg(&job_key)
+            .arg("data")
+            .arg(&data_json)
+            .query_async::<i64>(&mut conn)
+            .await?;
+
+        self.data = data;
+        Ok(())
+    }
+
+    /// Delete all log entries for this job from Redis.
+    pub async fn clear_logs(&self) -> BullmqResult<()> {
+        let ctx = self.ctx()?;
+        let mut conn = ctx.conn.clone();
+        let job_key = self.queue_key(&self.id)?;
+        let logs_key = format!("{}:logs", job_key);
+
+        redis::cmd("DEL")
+            .arg(&logs_key)
+            .query_async::<i64>(&mut conn)
+            .await?;
+
+        Ok(())
+    }
 }
