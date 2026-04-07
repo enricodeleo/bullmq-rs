@@ -7,6 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{BullmqError, BullmqResult};
+use crate::queue_events::{QueueEvent, QueueEvents};
 use crate::scripts::ScriptLoader;
 use crate::scripts::commands::key as build_key;
 use crate::types::{JobOptions, JobState};
@@ -655,14 +656,110 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
 
     /// Wait until this job is finished (completed or failed).
     ///
-    /// **Not yet implemented.** Requires QueueEvents subsystem.
+    /// Subscribes to the QueueEvents broadcast channel and filters for
+    /// matching Completed/Failed events. Also checks Redis immediately
+    /// for the race condition where the job already finished before
+    /// subscribing.
     pub async fn wait_until_finished(
         &self,
-        _ttl: Option<Duration>,
+        queue_events: &QueueEvents,
+        ttl: Option<Duration>,
     ) -> BullmqResult<serde_json::Value> {
-        Err(BullmqError::NotImplemented(
-            "waitUntilFinished requires QueueEvents (not yet implemented)".into(),
-        ))
+        let ctx = self.ctx()?;
+        let mut conn = ctx.conn.clone();
+        let job_id = self.id.clone();
+
+        // 1. Subscribe first (before checking Redis) to avoid missing events.
+        let mut rx = queue_events.subscribe();
+
+        // 2. Race condition guard: check if already finished.
+        if let Some(result) = self.check_finished(&mut conn, &ctx.prefix, &ctx.queue_name, &job_id).await? {
+            return result;
+        }
+
+        // 3. Wait for matching event with optional timeout.
+        let wait_fut = async {
+            loop {
+                match rx.recv().await {
+                    Ok((QueueEvent::Completed { job_id: eid, return_value }, _)) if eid == job_id => {
+                        return Ok(return_value);
+                    }
+                    Ok((QueueEvent::Failed { job_id: eid, reason }, _)) if eid == job_id => {
+                        return Err(BullmqError::Other(reason));
+                    }
+                    Ok(_) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Missed events — fall back to Redis check.
+                        if let Some(result) = self.check_finished(&mut conn, &ctx.prefix, &ctx.queue_name, &job_id).await? {
+                            return result;
+                        }
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return Err(BullmqError::Other("QueueEvents closed".into()));
+                    }
+                }
+            }
+        };
+
+        match ttl {
+            Some(duration) => {
+                tokio::time::timeout(duration, wait_fut)
+                    .await
+                    .unwrap_or(Err(BullmqError::Other("Job wait timed out".into())))
+            }
+            None => wait_fut.await,
+        }
+    }
+
+    /// Check Redis to see if this job is already in completed or failed state.
+    async fn check_finished(
+        &self,
+        conn: &mut ConnectionManager,
+        prefix: &str,
+        queue_name: &str,
+        job_id: &str,
+    ) -> BullmqResult<Option<BullmqResult<serde_json::Value>>> {
+        let completed_key = build_key(prefix, queue_name, "completed");
+        let failed_key = build_key(prefix, queue_name, "failed");
+        let job_key = build_key(prefix, queue_name, job_id);
+
+        // Check completed
+        let score: Option<f64> = redis::cmd("ZSCORE")
+            .arg(&completed_key)
+            .arg(job_id)
+            .query_async(conn)
+            .await?;
+        if score.is_some() {
+            let rv: Option<String> = redis::cmd("HGET")
+                .arg(&job_key)
+                .arg("returnvalue")
+                .query_async(conn)
+                .await?;
+            let value = rv
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or(serde_json::Value::Null);
+            return Ok(Some(Ok(value)));
+        }
+
+        // Check failed
+        let score: Option<f64> = redis::cmd("ZSCORE")
+            .arg(&failed_key)
+            .arg(job_id)
+            .query_async(conn)
+            .await?;
+        if score.is_some() {
+            let reason: Option<String> = redis::cmd("HGET")
+                .arg(&job_key)
+                .arg("failedReason")
+                .query_async(conn)
+                .await?;
+            // failedReason is stored as a plain string in Redis, not JSON-encoded.
+            let reason = reason.unwrap_or_else(|| "Unknown failure".to_string());
+            return Ok(Some(Err(BullmqError::Other(reason))));
+        }
+
+        Ok(None)
     }
 
     /// Get this job's dependencies.

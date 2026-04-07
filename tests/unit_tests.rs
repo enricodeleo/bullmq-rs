@@ -446,9 +446,6 @@ async fn test_job_methods_without_context_return_error() {
     assert!(err.to_string().contains("no connection context"));
 
     // Stubs return NotImplemented (they check this before ctx)
-    let err = job.wait_until_finished(None).await.unwrap_err();
-    assert!(err.to_string().contains("Not implemented"));
-
     let err = job.get_dependencies().await.unwrap_err();
     assert!(err.to_string().contains("Not implemented"));
 

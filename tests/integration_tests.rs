@@ -981,9 +981,6 @@ async fn test_job_stubs_not_implemented() {
 
     let job = queue.add("test", "data".to_string(), None).await.unwrap();
 
-    let err = job.wait_until_finished(None).await.unwrap_err();
-    assert!(err.to_string().contains("Not implemented"));
-
     let err = job.get_dependencies().await.unwrap_err();
     assert!(err.to_string().contains("Not implemented"));
 
@@ -1369,5 +1366,165 @@ async fn test_worker_continuous_processing_no_stall() {
     let final_count = *completed.lock().await;
     assert_eq!(final_count, 20);
 
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 28. test_wait_until_finished_success
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_wait_until_finished_success() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    let mut qe = QueueEventsBuilder::new(&qname)
+        .connection(conn.clone())
+        .blocking_timeout(2_000)
+        .build()
+        .await
+        .unwrap();
+
+    let queue = QueueBuilder::new(&qname)
+        .connection(conn.clone())
+        .build::<String>()
+        .await
+        .unwrap();
+
+    let job = queue.add("test", "data".to_string(), None).await.unwrap();
+
+    let worker = WorkerBuilder::new(&qname)
+        .connection(conn.clone())
+        .concurrency(1)
+        .build::<String>();
+
+    let handle = worker
+        .start(|_job| async move { Ok(()) })
+        .await
+        .unwrap();
+
+    let result = job
+        .wait_until_finished(&qe, Some(Duration::from_secs(10)))
+        .await;
+
+    assert!(result.is_ok());
+
+    handle.shutdown();
+    handle.wait().await.unwrap();
+    qe.close().await.unwrap();
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 29. test_wait_until_finished_timeout
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_wait_until_finished_timeout() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    let mut qe = QueueEventsBuilder::new(&qname)
+        .connection(conn.clone())
+        .blocking_timeout(2_000)
+        .build()
+        .await
+        .unwrap();
+
+    let queue = QueueBuilder::new(&qname)
+        .connection(conn.clone())
+        .build::<String>()
+        .await
+        .unwrap();
+
+    let opts = JobOptions {
+        delay: Some(Duration::from_secs(3600)),
+        ..Default::default()
+    };
+    let job = queue.add("test", "data".to_string(), Some(opts)).await.unwrap();
+
+    let result = job
+        .wait_until_finished(&qe, Some(Duration::from_secs(1)))
+        .await;
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("timed out"));
+
+    qe.close().await.unwrap();
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 30. test_wait_until_finished_already_completed
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_wait_until_finished_already_completed() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    let queue = QueueBuilder::new(&qname)
+        .connection(conn.clone())
+        .build::<String>()
+        .await
+        .unwrap();
+
+    let job = queue.add("test", "data".to_string(), None).await.unwrap();
+
+    // Process the job first
+    let completed = Arc::new(Mutex::new(false));
+    let completed_clone = completed.clone();
+
+    let worker = WorkerBuilder::new(&qname)
+        .connection(conn.clone())
+        .concurrency(1)
+        .build::<String>();
+
+    let handle = worker
+        .start(move |_job| {
+            let completed = completed_clone.clone();
+            async move {
+                let mut c = completed.lock().await;
+                *c = true;
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+    // Wait until the job is actually completed
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if *completed.lock().await {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("Job never completed");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    handle.shutdown();
+    handle.wait().await.unwrap();
+
+    // NOW start QueueEvents and call waitUntilFinished — should return immediately
+    // via the race condition guard
+    let mut qe = QueueEventsBuilder::new(&qname)
+        .connection(conn.clone())
+        .blocking_timeout(2_000)
+        .build()
+        .await
+        .unwrap();
+
+    let result = job
+        .wait_until_finished(&qe, Some(Duration::from_secs(3)))
+        .await;
+
+    assert!(result.is_ok());
+
+    qe.close().await.unwrap();
     queue.drain().await.unwrap();
 }
