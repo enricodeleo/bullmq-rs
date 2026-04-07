@@ -16,9 +16,14 @@ use crate::job::{Job, JobContext};
 type CompletedCallback = Arc<dyn Fn(&Job<serde_json::Value>) + Send + Sync>;
 /// Type alias for the on_failed callback.
 type FailedCallback = Arc<dyn Fn(&Job<serde_json::Value>, &BullmqError) + Send + Sync>;
-use crate::scripts::commands::{extend_lock, move_stalled_jobs_to_wait, move_to_active, move_to_delayed, move_to_finished};
+use crate::scripts::commands::{
+    extend_lock, move_stalled_jobs_to_wait, move_to_active, move_to_delayed, move_to_finished,
+};
 use crate::scripts::ScriptLoader;
 use crate::types::{WorkerOptions, DEFAULT_MAX_EVENTS};
+
+const MARKER_BLOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const BLOCKING_CONN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// A worker that processes jobs from a queue.
 ///
@@ -104,7 +109,10 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
         Fut: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
     {
         // Create two independent ConnectionManager instances.
-        let blocking_conn = self.conn.get_manager().await?;
+        let blocking_conn = self
+            .conn
+            .get_manager_with_response_timeout(Some(BLOCKING_CONN_RESPONSE_TIMEOUT))
+            .await?;
         let cmd_conn = self.conn.get_manager().await?;
 
         // Generate a unique worker token.
@@ -131,7 +139,8 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
 
         // Channel for fast-path: moveToFinished can return the next job.
         // Capacity matches concurrency so concurrent handler completions don't drop prefetched jobs.
-        let (next_job_tx, next_job_rx) = tokio::sync::mpsc::channel::<move_to_active::MoveToActiveResult>(concurrency);
+        let (next_job_tx, next_job_rx) =
+            tokio::sync::mpsc::channel::<move_to_active::MoveToActiveResult>(concurrency);
         let next_job_rx = Arc::new(Mutex::new(next_job_rx));
 
         let join_handle = tokio::spawn({
@@ -185,7 +194,11 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                         );
                                     }
                                     _ => {
-                                        tracing::warn!("Error extending lock for job {}: {}", job_id, e);
+                                        tracing::warn!(
+                                            "Error extending lock for job {}: {}",
+                                            job_id,
+                                            e
+                                        );
                                     }
                                 }
                             }
@@ -278,7 +291,7 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                         let bzpopmin_result: redis::RedisResult<redis::Value> =
                             redis::cmd("BZPOPMIN")
                                 .arg(&marker_key)
-                                .arg(5.0_f64)
+                                .arg(MARKER_BLOCK_TIMEOUT.as_secs_f64())
                                 .query_async(&mut blocking_conn)
                                 .await;
 
@@ -288,12 +301,16 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                         let parsed = match &bzpopmin_result {
                             Ok(redis::Value::Array(items)) if items.len() >= 3 => {
                                 let member = match &items[1] {
-                                    redis::Value::BulkString(b) => String::from_utf8_lossy(b).to_string(),
+                                    redis::Value::BulkString(b) => {
+                                        String::from_utf8_lossy(b).to_string()
+                                    }
                                     redis::Value::SimpleString(s) => s.clone(),
                                     _ => String::new(),
                                 };
                                 let score = match &items[2] {
-                                    redis::Value::BulkString(b) => String::from_utf8_lossy(b).parse::<f64>().unwrap_or(0.0),
+                                    redis::Value::BulkString(b) => {
+                                        String::from_utf8_lossy(b).parse::<f64>().unwrap_or(0.0)
+                                    }
                                     redis::Value::Double(f) => *f,
                                     redis::Value::Int(i) => *i as f64,
                                     _ => 0.0,
@@ -307,18 +324,14 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
 
                         // Check if the original result was a real error (not a timeout)
                         if let Err(ref e) = bzpopmin_result {
-                            // Timeouts and type errors (Nil response) are normal for BZPOPMIN
-                            let msg = e.to_string();
-                            if msg.contains("timed out") || msg.contains("response was nil") ||
-                               msg.contains("not compatible") {
+                            if !is_bzpopmin_timeout(e) {
+                                tracing::warn!("BZPOPMIN error: {}, retrying after delay", e);
+                                tokio::select! {
+                                    _ = tokio::time::sleep(Duration::from_secs(1)) => {},
+                                    _ = shutdown_rx.changed() => break,
+                                }
                                 continue;
                             }
-                            tracing::warn!("BZPOPMIN error: {}, retrying after delay", e);
-                            tokio::select! {
-                                _ = tokio::time::sleep(Duration::from_secs(1)) => {},
-                                _ = shutdown_rx.changed() => break,
-                            }
-                            continue;
                         }
 
                         match parsed {
@@ -377,7 +390,9 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                     .await
                                     {
                                         Ok(result) if result.job_id.is_some() => Some(result),
-                                        Ok(_) => { continue; }
+                                        Ok(_) => {
+                                            continue;
+                                        }
                                         Err(e) => {
                                             tracing::warn!("moveToActive error after delay: {}", e);
                                             continue;
@@ -425,7 +440,9 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                 .await
                                 {
                                     Ok(result) if result.job_id.is_some() => Some(result),
-                                    Ok(_) => { continue; }
+                                    Ok(_) => {
+                                        continue;
+                                    }
                                     Err(e) => {
                                         tracing::debug!("moveToActive recovery check: {}", e);
                                         continue;
@@ -439,13 +456,18 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                     if let Some(result) = move_result {
                         if let Some(job_id) = result.job_id {
                             // Deserialize the job from the hash data returned by moveToActive.
-                            let mut job: Job<T> = match Job::from_redis_hash(&job_id, &result.job_data) {
-                                Ok(j) => j,
-                                Err(e) => {
-                                    tracing::error!("Failed to deserialize job {}: {}", job_id, e);
-                                    continue;
-                                }
-                            };
+                            let mut job: Job<T> =
+                                match Job::from_redis_hash(&job_id, &result.job_data) {
+                                    Ok(j) => j,
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Failed to deserialize job {}: {}",
+                                            job_id,
+                                            e
+                                        );
+                                        continue;
+                                    }
+                                };
 
                             // Inject connection context, lock token, and active state
                             // for active-handle methods.
@@ -507,16 +529,20 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                             &job_id,
                                             &task_token,
                                             timestamp,
-                                            "{}",  // return value (empty JSON object)
+                                            "{}", // return value (empty JSON object)
                                             "completed",
                                             DEFAULT_MAX_EVENTS,
-                                            true,  // fetchNext
+                                            true, // fetchNext
                                             task_lock_duration,
                                             attempts,
                                         )
                                         .await
                                         {
-                                            Ok(move_to_finished::MoveToFinishedResult::NextJob(next)) => {
+                                            Ok(
+                                                move_to_finished::MoveToFinishedResult::NextJob(
+                                                    next,
+                                                ),
+                                            ) => {
                                                 // Fast-path: send next job via channel.
                                                 if next.job_id.is_some() {
                                                     if let Err(e) = next_job_tx.try_send(next) {
@@ -611,7 +637,8 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                             // Invoke on_failed callback even for retries.
                                             if let Some(ref cb) = on_failed {
                                                 if let Ok(val_job) = convert_job_to_value(&job) {
-                                                    let bullmq_err = BullmqError::Other(err.to_string());
+                                                    let bullmq_err =
+                                                        BullmqError::Other(err.to_string());
                                                     cb(&val_job, &bullmq_err);
                                                 }
                                             }
@@ -656,7 +683,8 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                                             // Invoke on_failed callback.
                                             if let Some(ref cb) = on_failed {
                                                 if let Ok(val_job) = convert_job_to_value(&job) {
-                                                    let bullmq_err = BullmqError::Other(err.to_string());
+                                                    let bullmq_err =
+                                                        BullmqError::Other(err.to_string());
                                                     cb(&val_job, &bullmq_err);
                                                 }
                                             }
@@ -682,7 +710,10 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
                 }
 
                 // Graceful shutdown: wait for all in-flight jobs by acquiring all permits.
-                tracing::info!("Worker '{}' shutting down, waiting for in-flight jobs...", name);
+                tracing::info!(
+                    "Worker '{}' shutting down, waiting for in-flight jobs...",
+                    name
+                );
                 let _ = semaphore.acquire_many(concurrency as u32).await;
                 tracing::info!("Worker '{}' shut down", name);
 
@@ -699,6 +730,11 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static> Worker<T> 
             join_handle,
         })
     }
+}
+
+fn is_bzpopmin_timeout(error: &redis::RedisError) -> bool {
+    let msg = error.to_string();
+    msg.contains("timed out") || msg.contains("response was nil") || msg.contains("not compatible")
 }
 
 /// Convert a `Job<T>` to `Job<serde_json::Value>` for type-erased callbacks.

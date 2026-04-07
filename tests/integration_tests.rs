@@ -1112,6 +1112,105 @@ async fn test_worker_processes_preexisting_jobs() {
 }
 
 // ---------------------------------------------------------------------------
+// 23. test_worker_recovers_waiting_job_without_marker
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
+async fn test_worker_recovers_waiting_job_without_marker() {
+    let qname = unique_queue_name();
+    let conn = redis_conn();
+
+    let queue = QueueBuilder::new(&qname)
+        .connection(conn.clone())
+        .build::<TestJob>()
+        .await
+        .unwrap();
+
+    let completed = Arc::new(Mutex::new(false));
+    let completed_clone = completed.clone();
+
+    let worker = WorkerBuilder::new(&qname)
+        .connection(conn.clone())
+        .concurrency(1)
+        .build::<TestJob>();
+
+    let handle = worker
+        .start(move |_job| {
+            let completed = completed_clone.clone();
+            async move {
+                *completed.lock().await = true;
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+    // Let the worker settle into its idle blocking loop.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let mut raw = raw_redis_conn().await;
+    let job_id = "manual-no-marker";
+    let wait_key = format!("bull:{}:wait", qname);
+    let marker_key = format!("bull:{}:marker", qname);
+    let job_key = format!("bull:{}:{}", qname, job_id);
+    let data = serde_json::to_string(&TestJob {
+        value: "manual".into(),
+    })
+    .unwrap();
+
+    redis::cmd("HSET")
+        .arg(&job_key)
+        .arg("name")
+        .arg("manual")
+        .arg("data")
+        .arg(&data)
+        .arg("opts")
+        .arg("{}")
+        .arg("timestamp")
+        .arg("1")
+        .arg("delay")
+        .arg("0")
+        .arg("priority")
+        .arg("0")
+        .arg("atm")
+        .arg("0")
+        .arg("ats")
+        .arg("0")
+        .query_async::<()>(&mut raw)
+        .await
+        .unwrap();
+
+    redis::cmd("LPUSH")
+        .arg(&wait_key)
+        .arg(job_id)
+        .query_async::<()>(&mut raw)
+        .await
+        .unwrap();
+
+    redis::cmd("DEL")
+        .arg(&marker_key)
+        .query_async::<()>(&mut raw)
+        .await
+        .unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        if *completed.lock().await {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("Timed out waiting for worker to recover a wait job without a marker");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    handle.shutdown();
+    handle.wait().await.unwrap();
+    queue.drain().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
 // 24. test_queue_events_basic_flow
 // ---------------------------------------------------------------------------
 
