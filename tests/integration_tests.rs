@@ -1343,7 +1343,6 @@ async fn test_job_get_dependencies_and_children_values() {
         .connection(conn.clone())
         .build::<TestJob>();
     let child_handle = child_worker.start(|_job| async move { Ok(()) }).await.unwrap();
-
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let after = loop {
         let deps = node.job.get_dependencies().await.unwrap();
