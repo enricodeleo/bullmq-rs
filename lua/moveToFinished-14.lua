@@ -32,13 +32,20 @@
     On success without fetchNext: 0
     On success with fetchNext: array [nextJobId, nextJobData...] or 0
 
-  Ported from BullMQ (stripped: parent/flow, rate limiter, groups, metrics).
+  Ported from BullMQ (stripped: rate limiter, groups, metrics).
 ]]
 local rcall = redis.call
 
 --@include "removeLock"
 --@include "addBaseMarkerIfNeeded"
+--@include "addJobInTargetList"
+--@include "addJobWithPriority"
+--@include "getTargetQueueList"
 --@include "getPriorityScore"
+--@include "moveParentToWait"
+--@include "moveParentToWaitIfNeeded"
+--@include "moveParentToWaitIfNoPendingDependencies"
+--@include "updateParentDepsIfNeeded"
 --@include "getDelayedScore"
 --@include "addDelayMarkerIfNeeded"
 --@include "promoteDelayedJobs"
@@ -98,6 +105,32 @@ else
         "finishedOn", timestamp,
         "failedReason", returnvalue,
         "atm", attemptsMade)
+end
+
+-- 6. Update parent dependencies for completed child jobs before fetching the next job
+if targetState == "completed" then
+  local parentKey = rcall("HGET", jobKey, "parentKey")
+  local parentData = rcall("HGET", jobKey, "parent")
+
+  if parentKey and parentData then
+    local parent = cjson.decode(parentData)
+    local parentId = parent["id"]
+    local parentQueueKey = parent["queue"]
+
+    if parentId and parentQueueKey then
+      local parentDependenciesKey = parentKey .. ":dependencies"
+      rcall("SREM", parentDependenciesKey, jobKey)
+      updateParentDepsIfNeeded(
+        parentKey,
+        parentQueueKey,
+        parentDependenciesKey,
+        parentId,
+        jobKey,
+        returnvalue,
+        timestamp
+      )
+    end
+  end
 end
 
 -- 6. Emit finished event

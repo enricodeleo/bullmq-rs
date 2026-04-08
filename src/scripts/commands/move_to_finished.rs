@@ -39,6 +39,8 @@ pub(crate) async fn move_to_finished(
     let lock_key = format!("{}:lock", job_key);
     let job_key_prefix = format!("{}:{}:", prefix, queue_name);
 
+    // Parent release now reads parentKey/parent metadata from the job hash, so
+    // this command keeps the existing BullMQ-compatible key/arg layout.
     let keys = vec![
         key(prefix, queue_name, "wait"),
         key(prefix, queue_name, "active"),

@@ -1529,6 +1529,95 @@ async fn test_flow_add_cross_queue_tree_tracks_all_dependencies() {
 
 #[tokio::test]
 #[ignore = "requires running Redis"]
+async fn test_flow_parent_runs_after_all_children_complete() {
+    let parent_queue = unique_queue_name();
+    let child_queue = unique_queue_name();
+    let conn = redis_conn();
+
+    let producer = FlowProducerBuilder::new()
+        .connection(conn.clone())
+        .build()
+        .await
+        .unwrap();
+
+    let seen = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let child_seen = seen.clone();
+    let parent_seen = seen.clone();
+
+    let child_worker = WorkerBuilder::new(&child_queue)
+        .connection(conn.clone())
+        .build::<TestJob>();
+    let child_handle = child_worker
+        .start(move |job| {
+            let child_seen = child_seen.clone();
+            async move {
+                child_seen
+                    .lock()
+                    .await
+                    .push(format!("child:{}", job.data.value));
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+    let parent_worker = WorkerBuilder::new(&parent_queue)
+        .connection(conn.clone())
+        .build::<TestJob>();
+    let parent_handle = parent_worker
+        .start(move |job| {
+            let parent_seen = parent_seen.clone();
+            async move {
+                parent_seen
+                    .lock()
+                    .await
+                    .push(format!("parent:{}", job.data.value));
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+    producer
+        .add(FlowJob {
+            name: "parent".into(),
+            queue_name: parent_queue.clone(),
+            data: TestJob { value: "p".into() },
+            prefix: None,
+            opts: None,
+            children: vec![
+                FlowJob {
+                    name: "child-1".into(),
+                    queue_name: child_queue.clone(),
+                    data: TestJob { value: "c1".into() },
+                    prefix: None,
+                    opts: None,
+                    children: vec![],
+                },
+                FlowJob {
+                    name: "child-2".into(),
+                    queue_name: child_queue.clone(),
+                    data: TestJob { value: "c2".into() },
+                    prefix: None,
+                    opts: None,
+                    children: vec![],
+                },
+            ],
+        })
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let seen = seen.lock().await.clone();
+    assert_eq!(seen, vec!["child:c1", "child:c2", "parent:p"]);
+
+    child_handle.shutdown();
+    parent_handle.shutdown();
+}
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
 async fn test_flow_add_rejects_existing_custom_child_id() {
     let qname = unique_queue_name();
     let conn = redis_conn();

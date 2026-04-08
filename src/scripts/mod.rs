@@ -77,13 +77,23 @@ impl ScriptLoader {
             };
         }
         inc!("storeJob", "storeJob.lua");
+        inc!("addJobInTargetList", "addJobInTargetList.lua");
+        inc!("addJobWithPriority", "addJobWithPriority.lua");
         inc!("addBaseMarkerIfNeeded", "addBaseMarkerIfNeeded.lua");
         inc!("addDelayMarkerIfNeeded", "addDelayMarkerIfNeeded.lua");
         inc!("getDelayedScore", "getDelayedScore.lua");
+        inc!("getTargetQueueList", "getTargetQueueList.lua");
         inc!("getPriorityScore", "getPriorityScore.lua");
         inc!("moveJobToWait", "moveJobToWait.lua");
+        inc!("moveParentToWait", "moveParentToWait.lua");
+        inc!("moveParentToWaitIfNeeded", "moveParentToWaitIfNeeded.lua");
+        inc!(
+            "moveParentToWaitIfNoPendingDependencies",
+            "moveParentToWaitIfNoPendingDependencies.lua"
+        );
         inc!("promoteDelayedJobs", "promoteDelayedJobs.lua");
         inc!("removeLock", "removeLock.lua");
+        inc!("updateParentDepsIfNeeded", "updateParentDepsIfNeeded.lua");
         m
     }
 
