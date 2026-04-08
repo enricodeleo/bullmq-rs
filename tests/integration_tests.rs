@@ -1333,9 +1333,11 @@ async fn test_job_get_dependencies_and_children_values() {
         .await
         .unwrap();
 
+    let child_key = format!("bull:{}:{}", child_queue, node.children[0].job.id);
+
     let before = node.job.get_dependencies().await.unwrap();
-    assert_eq!(before.processed.len(), 0);
-    assert_eq!(before.unprocessed.len(), 1);
+    assert!(before.processed.is_empty());
+    assert_eq!(before.unprocessed, vec![child_key.clone()]);
 
     let child_worker = WorkerBuilder::new(&child_queue)
         .connection(conn.clone())
@@ -1357,7 +1359,13 @@ async fn test_job_get_dependencies_and_children_values() {
     let values = node.job.get_children_values().await.unwrap();
     assert_eq!(after.processed.len(), 1);
     assert_eq!(after.unprocessed.len(), 0);
-    assert_eq!(values.len(), 1);
+    let expected_child_return = serde_json::json!({});
+    assert_eq!(
+        after.processed.get(&child_key),
+        Some(&expected_child_return)
+    );
+    assert_eq!(values.get(&child_key), Some(&expected_child_return));
+    assert_eq!(values, after.processed);
 
     child_handle.shutdown();
     child_handle.wait().await.unwrap();
