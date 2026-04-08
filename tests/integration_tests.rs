@@ -1876,7 +1876,6 @@ async fn test_flow_releases_parent_to_prioritized() {
         )
         .await
         .unwrap();
-
     let child_worker = WorkerBuilder::new(&child_queue)
         .connection(conn.clone())
         .build::<TestJob>();
