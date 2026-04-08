@@ -1494,6 +1494,37 @@ async fn test_flow_add_cross_queue_tree_tracks_all_dependencies() {
     assert_eq!(parent.get_waiting_children_count().await.unwrap(), 1);
     assert_eq!(child.get_waiting_count().await.unwrap(), 2);
     assert_eq!(node.children.len(), 2);
+
+    let parent_key = format!("bull:{}:{}", parent_queue, node.job.id);
+    let child_keys: std::collections::HashSet<String> = node
+        .children
+        .iter()
+        .map(|child_node| format!("bull:{}:{}", child_queue, child_node.job.id))
+        .collect();
+
+    let mut raw = raw_redis_conn().await;
+    let deps: std::collections::HashSet<String> = redis::cmd("SMEMBERS")
+        .arg(format!("{parent_key}:dependencies"))
+        .query_async(&mut raw)
+        .await
+        .unwrap();
+    assert_eq!(deps, child_keys);
+
+    for child_key in &child_keys {
+        let parent_meta: (Option<String>, Option<String>) = redis::cmd("HMGET")
+            .arg(child_key)
+            .arg("parentKey")
+            .arg("parent")
+            .query_async(&mut raw)
+            .await
+            .unwrap();
+        assert_eq!(parent_meta.0.as_deref(), Some(parent_key.as_str()));
+
+        let parent_json: serde_json::Value =
+            serde_json::from_str(parent_meta.1.as_deref().unwrap()).unwrap();
+        assert_eq!(parent_json["id"], node.job.id);
+        assert_eq!(parent_json["queue"], format!("bull:{parent_queue}"));
+    }
 }
 
 #[tokio::test]
