@@ -83,11 +83,9 @@ impl FlowProducer {
     where
         T: Serialize + DeserializeOwned + Send + Sync + 'static,
     {
-        let root_prefix = job.prefix.clone().unwrap_or_else(|| self.prefix.clone());
         let root_queue = job.queue_name.clone();
-        validate_same_queue(&job, &root_prefix, &root_queue, &self.prefix)?;
-
-        let auto_id_count = count_auto_ids(&job);
+        let mut auto_id_counts = std::collections::HashMap::new();
+        count_auto_ids(&job, &self.prefix, &mut auto_id_counts);
         let mut conn = self.connection.get_manager().await?;
 
         self.scripts.load("addStandardJob", &mut conn).await?;
@@ -95,25 +93,22 @@ impl FlowProducer {
         self.scripts.load("addDelayedJob", &mut conn).await?;
         self.scripts.load("addParentJob", &mut conn).await?;
 
-        let mut next_auto_id = if auto_id_count == 0 {
-            0
-        } else {
+        let mut next_auto_ids = std::collections::HashMap::new();
+        for ((prefix, queue_name), auto_id_count) in auto_id_counts {
             let last_id: i64 = redis::cmd("INCRBY")
-                .arg(key(&root_prefix, &root_queue, "id"))
+                .arg(key(&prefix, &queue_name, "id"))
                 .arg(auto_id_count)
                 .query_async(&mut conn)
                 .await?;
-            last_id - auto_id_count as i64 + 1
-        };
+            next_auto_ids.insert((prefix, queue_name), last_id - auto_id_count as i64 + 1);
+        }
 
         let mut seen_job_keys = std::collections::HashSet::new();
         let prepared = prepare_node(
             job,
-            &root_prefix,
-            &root_queue,
             &self.prefix,
             None,
-            &mut next_auto_id,
+            &mut next_auto_ids,
             &mut seen_job_keys,
         )?;
         let planned_job_keys = collect_job_keys(&prepared);
@@ -164,34 +159,24 @@ fn effective_prefix(explicit_prefix: &Option<String>, default_prefix: &str) -> S
         .unwrap_or_else(|| default_prefix.to_string())
 }
 
-fn validate_same_queue<T>(
+fn count_auto_ids<T>(
     node: &FlowJob<T>,
-    root_prefix: &str,
-    root_queue: &str,
     default_prefix: &str,
-) -> BullmqResult<()> {
-    let prefix = effective_prefix(&node.prefix, default_prefix);
-    if prefix != root_prefix || node.queue_name != root_queue {
-        return Err(BullmqError::NotImplemented(
-            "FlowProducer::add only supports same-queue flows for now".into(),
-        ));
+    counts: &mut std::collections::HashMap<(String, String), usize>,
+) {
+    if node
+        .opts
+        .as_ref()
+        .and_then(|opts| opts.job_id.as_ref())
+        .is_none()
+    {
+        let prefix = effective_prefix(&node.prefix, default_prefix);
+        *counts.entry((prefix, node.queue_name.clone())).or_insert(0) += 1;
     }
 
     for child in &node.children {
-        validate_same_queue(child, root_prefix, root_queue, default_prefix)?;
+        count_auto_ids(child, default_prefix, counts);
     }
-
-    Ok(())
-}
-
-fn count_auto_ids<T>(node: &FlowJob<T>) -> usize {
-    let own = usize::from(
-        node.opts
-            .as_ref()
-            .and_then(|opts| opts.job_id.as_ref())
-            .is_none(),
-    );
-    own + node.children.iter().map(count_auto_ids).sum::<usize>()
 }
 
 struct PreparedNode<T> {
@@ -214,27 +199,26 @@ struct PreparedNode<T> {
 
 fn prepare_node<T>(
     job: FlowJob<T>,
-    root_prefix: &str,
-    root_queue: &str,
     default_prefix: &str,
     parent: Option<(String, String)>,
-    next_auto_id: &mut i64,
+    next_auto_ids: &mut std::collections::HashMap<(String, String), i64>,
     seen_job_keys: &mut std::collections::HashSet<String>,
 ) -> BullmqResult<PreparedNode<T>>
 where
     T: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     let prefix = effective_prefix(&job.prefix, default_prefix);
-    if prefix != root_prefix || job.queue_name != root_queue {
-        return Err(BullmqError::NotImplemented(
-            "FlowProducer::add only supports same-queue flows for now".into(),
-        ));
-    }
-
     let opts = job.opts.unwrap_or_default();
     let id = match opts.job_id.clone() {
         Some(job_id) => job_id,
         None => {
+            let queue_key = (prefix.clone(), job.queue_name.clone());
+            let next_auto_id = next_auto_ids.get_mut(&queue_key).ok_or_else(|| {
+                BullmqError::Other(format!(
+                    "Missing auto-id range for queue '{}:{}'",
+                    prefix, job.queue_name
+                ))
+            })?;
             let job_id = next_auto_id.to_string();
             *next_auto_id += 1;
             job_id
@@ -263,11 +247,9 @@ where
         .map(|child| {
             prepare_node(
                 child,
-                root_prefix,
-                root_queue,
                 default_prefix,
                 Some((job_key.clone(), parent_descriptor.clone())),
-                next_auto_id,
+                next_auto_ids,
                 seen_job_keys,
             )
         })

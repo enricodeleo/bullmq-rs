@@ -6,7 +6,7 @@
   KEYS[3] = id counter key
   KEYS[4] = events stream
   KEYS[5] = job hash key (prefix:queueName:jobId)
-  KEYS[6] = parent dependencies key (optional)
+  KEYS[6] = parent dependencies key (optional, stores fully-qualified child job keys)
 
   ARGV[1] = name
   ARGV[2] = data (JSON string)
@@ -26,6 +26,7 @@ local rcall = redis.call
 local waitChildrenKey = KEYS[1]
 local eventsKey = KEYS[4]
 local jobIdKey = KEYS[5]
+local childJobKey = jobIdKey
 local parentDependenciesKey = KEYS[6]
 
 local name = ARGV[1]
@@ -59,7 +60,7 @@ rcall("XADD", eventsKey, "MAXLEN", "~", maxEvents, "*", "event",
       "waiting-children", "jobId", jobId)
 
 if parentDependenciesKey ~= nil then
-  rcall("SADD", parentDependenciesKey, jobIdKey)
+  rcall("SADD", parentDependenciesKey, childJobKey)
 end
 
 return jobId

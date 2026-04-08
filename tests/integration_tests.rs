@@ -1439,6 +1439,65 @@ async fn test_flow_add_same_queue_parent_enters_waiting_children() {
 
 #[tokio::test]
 #[ignore = "requires running Redis"]
+async fn test_flow_add_cross_queue_tree_tracks_all_dependencies() {
+    let parent_queue = unique_queue_name();
+    let child_queue = unique_queue_name();
+    let conn = redis_conn();
+
+    let parent = QueueBuilder::new(&parent_queue)
+        .connection(conn.clone())
+        .build::<TestJob>()
+        .await
+        .unwrap();
+
+    let child = QueueBuilder::new(&child_queue)
+        .connection(conn.clone())
+        .build::<TestJob>()
+        .await
+        .unwrap();
+
+    let producer = FlowProducerBuilder::new()
+        .connection(conn.clone())
+        .build()
+        .await
+        .unwrap();
+
+    let node = producer
+        .add(FlowJob {
+            name: "parent".into(),
+            queue_name: parent_queue.clone(),
+            data: TestJob { value: "p".into() },
+            prefix: None,
+            opts: None,
+            children: vec![
+                FlowJob {
+                    name: "c1".into(),
+                    queue_name: child_queue.clone(),
+                    data: TestJob { value: "c1".into() },
+                    prefix: None,
+                    opts: None,
+                    children: vec![],
+                },
+                FlowJob {
+                    name: "c2".into(),
+                    queue_name: child_queue.clone(),
+                    data: TestJob { value: "c2".into() },
+                    prefix: None,
+                    opts: None,
+                    children: vec![],
+                },
+            ],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(parent.get_waiting_children_count().await.unwrap(), 1);
+    assert_eq!(child.get_waiting_count().await.unwrap(), 2);
+    assert_eq!(node.children.len(), 2);
+}
+
+#[tokio::test]
+#[ignore = "requires running Redis"]
 async fn test_flow_add_rejects_existing_custom_child_id() {
     let qname = unique_queue_name();
     let conn = redis_conn();
