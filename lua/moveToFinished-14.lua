@@ -42,12 +42,12 @@ local rcall = redis.call
 --@include "addJobWithPriority"
 --@include "getTargetQueueList"
 --@include "getPriorityScore"
+--@include "getDelayedScore"
+--@include "addDelayMarkerIfNeeded"
 --@include "moveParentToWait"
 --@include "moveParentToWaitIfNeeded"
 --@include "moveParentToWaitIfNoPendingDependencies"
 --@include "updateParentDepsIfNeeded"
---@include "getDelayedScore"
---@include "addDelayMarkerIfNeeded"
 --@include "promoteDelayedJobs"
 
 local waitKey = KEYS[1]
@@ -119,16 +119,17 @@ if targetState == "completed" then
 
     if parentId and parentQueueKey then
       local parentDependenciesKey = parentKey .. ":dependencies"
-      rcall("SREM", parentDependenciesKey, jobKey)
-      updateParentDepsIfNeeded(
-        parentKey,
-        parentQueueKey,
-        parentDependenciesKey,
-        parentId,
-        jobKey,
-        returnvalue,
-        timestamp
-      )
+      if rcall("SREM", parentDependenciesKey, jobKey) == 1 then
+        updateParentDepsIfNeeded(
+          parentKey,
+          parentQueueKey,
+          parentDependenciesKey,
+          parentId,
+          jobKey,
+          returnvalue,
+          timestamp
+        )
+      end
     end
   end
 end

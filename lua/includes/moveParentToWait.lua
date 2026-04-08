@@ -6,6 +6,7 @@ local function moveParentToWait(parentQueueKey, parentKey, parentId, timestamp)
   local activeKey = parentQueueKey .. ":active"
   local pausedKey = parentQueueKey .. ":paused"
   local prioritizedKey = parentQueueKey .. ":prioritized"
+  local delayedKey = parentQueueKey .. ":delayed"
   local waitingChildrenKey = parentQueueKey .. ":waiting-children"
   local eventsKey = parentQueueKey .. ":events"
   local metaKey = parentQueueKey .. ":meta"
@@ -13,15 +14,24 @@ local function moveParentToWait(parentQueueKey, parentKey, parentId, timestamp)
   local pcKey = parentQueueKey .. ":pc"
 
   local target, isPausedOrMaxed = getTargetQueueList(metaKey, activeKey, waitKey, pausedKey)
-  local priority = tonumber(rcall("HGET", parentKey, "priority")) or 0
+  local jobAttributes = rcall("HMGET", parentKey, "priority", "delay")
+  local priority = tonumber(jobAttributes[1]) or 0
+  local delay = tonumber(jobAttributes[2]) or 0
 
   rcall("ZREM", waitingChildrenKey, parentId)
 
-  if priority > 0 then
+  if delay > 0 then
+    local score, delayedTimestamp = getDelayedScore(delayedKey, timestamp, delay)
+    rcall("ZADD", delayedKey, score, parentId)
+    rcall("XADD", eventsKey, "*", "event", "delayed", "jobId", parentId, "delay", delayedTimestamp)
+    addDelayMarkerIfNeeded(markerKey, delayedKey)
+  elseif priority > 0 then
     addJobWithPriority(markerKey, prioritizedKey, priority, parentId, pcKey, isPausedOrMaxed)
   else
-    addJobInTargetList(target, markerKey, "LPUSH", isPausedOrMaxed, parentId)
+    addJobInTargetList(target, markerKey, "RPUSH", isPausedOrMaxed, parentId)
   end
 
-  rcall("XADD", eventsKey, "*", "event", "waiting", "jobId", parentId, "prev", "waiting-children")
+  if delay == 0 then
+    rcall("XADD", eventsKey, "*", "event", "waiting", "jobId", parentId, "prev", "waiting-children")
+  end
 end
