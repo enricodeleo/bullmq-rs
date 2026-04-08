@@ -506,12 +506,12 @@ async fn test_job_methods_without_context_return_error() {
     let err = job.clear_logs().await.unwrap_err();
     assert!(err.to_string().contains("no connection context"));
 
-    // Stubs return NotImplemented (they check this before ctx)
+    // Dependency APIs require queue context and fail without it.
     let err = job.get_dependencies().await.unwrap_err();
-    assert!(err.to_string().contains("Not implemented"));
+    assert!(err.to_string().contains("no connection context"));
 
     let err = job.get_children_values().await.unwrap_err();
-    assert!(err.to_string().contains("Not implemented"));
+    assert!(err.to_string().contains("no connection context"));
 }
 
 // ---------------------------------------------------------------------------

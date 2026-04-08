@@ -1298,27 +1298,69 @@ async fn test_job_promote() {
 }
 
 // ---------------------------------------------------------------------------
-// 21. test_job_stubs_not_implemented
+// 21. test_job_get_dependencies_and_children_values
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 #[ignore = "requires running Redis"]
-async fn test_job_stubs_not_implemented() {
-    let queue = QueueBuilder::new(&unique_queue_name())
-        .connection(redis_conn())
-        .build::<String>()
+async fn test_job_get_dependencies_and_children_values() {
+    let parent_queue = unique_queue_name();
+    let child_queue = unique_queue_name();
+    let conn = redis_conn();
+
+    let producer = FlowProducerBuilder::new()
+        .connection(conn.clone())
+        .build()
         .await
         .unwrap();
 
-    let job = queue.add("test", "data".to_string(), None).await.unwrap();
+    let node = producer
+        .add(FlowJob {
+            name: "parent".into(),
+            queue_name: parent_queue.clone(),
+            data: TestJob { value: "p".into() },
+            prefix: None,
+            opts: None,
+            children: vec![FlowJob {
+                name: "child".into(),
+                queue_name: child_queue.clone(),
+                data: TestJob { value: "c1".into() },
+                prefix: None,
+                opts: None,
+                children: vec![],
+            }],
+        })
+        .await
+        .unwrap();
 
-    let err = job.get_dependencies().await.unwrap_err();
-    assert!(err.to_string().contains("Not implemented"));
+    let before = node.job.get_dependencies().await.unwrap();
+    assert_eq!(before.processed.len(), 0);
+    assert_eq!(before.unprocessed.len(), 1);
 
-    let err = job.get_children_values().await.unwrap_err();
-    assert!(err.to_string().contains("Not implemented"));
+    let child_worker = WorkerBuilder::new(&child_queue)
+        .connection(conn.clone())
+        .build::<TestJob>();
+    let child_handle = child_worker.start(|_job| async move { Ok(()) }).await.unwrap();
 
-    queue.drain().await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let after = loop {
+        let deps = node.job.get_dependencies().await.unwrap();
+        if deps.processed.len() == 1 && deps.unprocessed.is_empty() {
+            break deps;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("Timed out waiting for dependencies to move to processed");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    let values = node.job.get_children_values().await.unwrap();
+    assert_eq!(after.processed.len(), 1);
+    assert_eq!(after.unprocessed.len(), 0);
+    assert_eq!(values.len(), 1);
+
+    child_handle.shutdown();
+    child_handle.wait().await.unwrap();
 }
 
 // ---------------------------------------------------------------------------

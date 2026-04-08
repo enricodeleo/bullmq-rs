@@ -10,7 +10,7 @@ use crate::error::{BullmqError, BullmqResult};
 use crate::queue_events::{QueueEvent, QueueEvents};
 use crate::scripts::commands::key as build_key;
 use crate::scripts::ScriptLoader;
-use crate::types::{JobOptions, JobState};
+use crate::types::{JobDependencies, JobOptions, JobState};
 
 /// Returns the current time as milliseconds since the Unix epoch.
 fn now_ms() -> u64 {
@@ -749,22 +749,41 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
         Ok(None)
     }
 
-    /// Get this job's dependencies.
-    ///
-    /// **Not yet implemented.** Requires Flows subsystem.
-    pub async fn get_dependencies(&self) -> BullmqResult<serde_json::Value> {
-        Err(BullmqError::NotImplemented(
-            "getDependencies requires Flows (not yet implemented)".into(),
-        ))
+    /// Get this job's dependencies, split into processed and unprocessed sets.
+    pub async fn get_dependencies(&self) -> BullmqResult<JobDependencies> {
+        let ctx = self.ctx()?;
+        let mut conn = ctx.conn.clone();
+        let job_key = self.queue_key(&self.id)?;
+
+        let processed_raw: HashMap<String, String> = redis::cmd("HGETALL")
+            .arg(format!("{job_key}:processed"))
+            .query_async(&mut conn)
+            .await?;
+        let unprocessed: Vec<String> = redis::cmd("SMEMBERS")
+            .arg(format!("{job_key}:dependencies"))
+            .query_async(&mut conn)
+            .await?;
+
+        let processed = processed_raw
+            .into_iter()
+            .map(|(job_key, value)| {
+                let parsed =
+                    serde_json::from_str(&value).unwrap_or(serde_json::Value::Null);
+                (job_key, parsed)
+            })
+            .collect();
+
+        Ok(JobDependencies {
+            processed,
+            unprocessed,
+        })
     }
 
     /// Get the return values of this job's children.
-    ///
-    /// **Not yet implemented.** Requires Flows subsystem.
-    pub async fn get_children_values(&self) -> BullmqResult<serde_json::Value> {
-        Err(BullmqError::NotImplemented(
-            "getChildrenValues requires Flows (not yet implemented)".into(),
-        ))
+    pub async fn get_children_values(
+        &self,
+    ) -> BullmqResult<HashMap<String, serde_json::Value>> {
+        Ok(self.get_dependencies().await?.processed)
     }
 }
 
