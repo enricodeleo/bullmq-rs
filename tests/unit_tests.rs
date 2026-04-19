@@ -4,7 +4,9 @@ use std::time::Duration;
 
 #[test]
 fn test_flow_job_public_shape() {
-    use bullmq_rs::{FlowJob, FlowNode, FlowProducer, FlowProducerBuilder, Job, JobDependencies, JobOptions};
+    use bullmq_rs::{
+        FlowJob, FlowNode, FlowProducer, FlowProducerBuilder, Job, JobDependencies, JobOptions,
+    };
 
     let flow = FlowJob {
         name: "parent".into(),
@@ -22,10 +24,7 @@ fn test_flow_job_public_shape() {
         }],
     };
     let _shape_check = async {
-        let producer: FlowProducer = FlowProducerBuilder::new()
-            .prefix("custom")
-            .build()
-            .await?;
+        let producer: FlowProducer = FlowProducerBuilder::new().prefix("custom").build().await?;
         let job = FlowJob {
             name: "child".into(),
             queue_name: "children".into(),

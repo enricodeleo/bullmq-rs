@@ -20,8 +20,7 @@ pub(crate) async fn add_parent_job(
     max_events: u64,
     parent: Option<(&str, &str, &str)>,
 ) -> BullmqResult<String> {
-    let (parent_dependencies_key, parent_key, parent_data) =
-        parent.unwrap_or(("", "", ""));
+    let (parent_dependencies_key, parent_key, parent_data) = parent.unwrap_or(("", "", ""));
     let keys = vec![
         key(prefix, queue_name, "waiting-children"),
         key(prefix, queue_name, "meta"),

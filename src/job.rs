@@ -233,9 +233,9 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
             .map(|s| s.parse::<u64>())
             .transpose()
             .map_err(|_| BullmqError::Other("Invalid finishedOn".into()))?;
-        let failed_reason = map.get("failedReason").map(|s| {
-            serde_json::from_str(s).unwrap_or_else(|_| s.clone())
-        });
+        let failed_reason = map
+            .get("failedReason")
+            .map(|s| serde_json::from_str(s).unwrap_or_else(|_| s.clone()));
         let return_value = map
             .get("returnvalue")
             .map(|s| serde_json::from_str(s))
@@ -767,8 +767,7 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
         let processed = processed_raw
             .into_iter()
             .map(|(job_key, value)| {
-                let parsed =
-                    serde_json::from_str(&value).unwrap_or(serde_json::Value::Null);
+                let parsed = serde_json::from_str(&value).unwrap_or(serde_json::Value::Null);
                 (job_key, parsed)
             })
             .collect();
@@ -780,9 +779,7 @@ impl<T: Serialize + DeserializeOwned> Job<T> {
     }
 
     /// Get the return values of this job's children.
-    pub async fn get_children_values(
-        &self,
-    ) -> BullmqResult<HashMap<String, serde_json::Value>> {
+    pub async fn get_children_values(&self) -> BullmqResult<HashMap<String, serde_json::Value>> {
         Ok(self.get_dependencies().await?.processed)
     }
 }

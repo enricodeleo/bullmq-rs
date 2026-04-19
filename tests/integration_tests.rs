@@ -18,8 +18,7 @@ fn redis_conn() -> RedisConnection {
 
 /// Helper: get a raw redis ConnectionManager for direct Redis commands in tests.
 async fn raw_redis_conn() -> redis::aio::ConnectionManager {
-    let url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let client = redis::Client::open(url.as_str()).unwrap();
     redis::aio::ConnectionManager::new(client).await.unwrap()
 }
@@ -92,7 +91,10 @@ async fn test_queue_add_and_get_job() {
         .query_async(&mut conn)
         .await
         .unwrap();
-    assert!(data.contains("hello"), "data field should contain serialized job data");
+    assert!(
+        data.contains("hello"),
+        "data field should contain serialized job data"
+    );
 
     let timestamp: String = redis::cmd("HGET")
         .arg(&job_key)
@@ -573,10 +575,7 @@ async fn test_worker_processes_job() {
         .skip_stalled_check(true)
         .build::<TestJob>();
 
-    let handle = worker
-        .start(|_job| async move { Ok(()) })
-        .await
-        .unwrap();
+    let handle = worker.start(|_job| async move { Ok(()) }).await.unwrap();
 
     // Wait for processing
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -631,8 +630,7 @@ async fn test_worker_retry_then_fail() {
 
     let handle = worker
         .start(|_job| async move {
-            let err: Box<dyn std::error::Error + Send + Sync> =
-                "intentional failure".into();
+            let err: Box<dyn std::error::Error + Send + Sync> = "intentional failure".into();
             Err(err)
         })
         .await
@@ -817,10 +815,7 @@ async fn test_pause_resume() {
         .skip_stalled_check(true)
         .build::<TestJob>();
 
-    let handle = worker
-        .start(|_job| async move { Ok(()) })
-        .await
-        .unwrap();
+    let handle = worker.start(|_job| async move { Ok(()) }).await.unwrap();
 
     tokio::time::sleep(Duration::from_secs(3)).await;
     handle.shutdown();
@@ -921,10 +916,7 @@ async fn test_events_stream() {
         .skip_stalled_check(true)
         .build::<TestJob>();
 
-    let handle = worker
-        .start(|_job| async move { Ok(()) })
-        .await
-        .unwrap();
+    let handle = worker.start(|_job| async move { Ok(()) }).await.unwrap();
 
     tokio::time::sleep(Duration::from_secs(3)).await;
     handle.shutdown();
@@ -1033,7 +1025,10 @@ async fn test_job_update_data() {
 
     queue.drain().await.unwrap();
 
-    let mut job = queue.add("test", "original".to_string(), None).await.unwrap();
+    let mut job = queue
+        .add("test", "original".to_string(), None)
+        .await
+        .unwrap();
 
     job.update_data("updated".to_string()).await.unwrap();
 
@@ -1111,7 +1106,10 @@ async fn test_job_get_state_delayed() {
         delay: Some(Duration::from_secs(3600)),
         ..Default::default()
     };
-    let mut job = queue.add("test", "data".to_string(), Some(opts)).await.unwrap();
+    let mut job = queue
+        .add("test", "data".to_string(), Some(opts))
+        .await
+        .unwrap();
     let state = job.get_state().await.unwrap();
     assert_eq!(state, JobState::Delayed);
     assert!(job.is_delayed().await.unwrap());
@@ -1205,7 +1203,10 @@ async fn test_concurrent_workers() {
             break;
         }
         if tokio::time::Instant::now() > deadline {
-            panic!("Timed out: only {}/10 jobs processed by concurrent workers", c);
+            panic!(
+                "Timed out: only {}/10 jobs processed by concurrent workers",
+                c
+            );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -1283,7 +1284,10 @@ async fn test_job_promote() {
         delay: Some(Duration::from_secs(3600)),
         ..Default::default()
     };
-    let mut job = queue.add("test", "data".to_string(), Some(opts)).await.unwrap();
+    let mut job = queue
+        .add("test", "data".to_string(), Some(opts))
+        .await
+        .unwrap();
 
     let state = job.get_state().await.unwrap();
     assert_eq!(state, JobState::Delayed);
@@ -1342,7 +1346,10 @@ async fn test_job_get_dependencies_and_children_values() {
     let child_worker = WorkerBuilder::new(&child_queue)
         .connection(conn.clone())
         .build::<TestJob>();
-    let child_handle = child_worker.start(|_job| async move { Ok(()) }).await.unwrap();
+    let child_handle = child_worker
+        .start(|_job| async move { Ok(()) })
+        .await
+        .unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let after = loop {
         let deps = node.job.get_dependencies().await.unwrap();
@@ -1963,7 +1970,10 @@ async fn test_flow_releases_parent_to_prioritized() {
 
     let prioritized = parent.get_prioritized(0, -1).await.unwrap();
     let prioritized_ids: Vec<String> = prioritized.into_iter().map(|job| job.id).collect();
-    assert_eq!(prioritized_ids, vec![existing.id.clone(), node.job.id.clone()]);
+    assert_eq!(
+        prioritized_ids,
+        vec![existing.id.clone(), node.job.id.clone()]
+    );
 
     child_handle.shutdown();
     child_handle.wait().await.unwrap();
@@ -2397,7 +2407,10 @@ async fn test_flow_add_rejects_watch_window_collision_cleanly() {
     let hook_release_key = format!("test:flow-hook-release:{qname}");
     std::env::set_var("BULLMQ_RS_FLOW_ADD_WATCH_HOOK_QUEUE", &qname);
     std::env::set_var("BULLMQ_RS_FLOW_ADD_WATCH_HOOK_OPEN_KEY", &hook_open_key);
-    std::env::set_var("BULLMQ_RS_FLOW_ADD_WATCH_HOOK_RELEASE_KEY", &hook_release_key);
+    std::env::set_var(
+        "BULLMQ_RS_FLOW_ADD_WATCH_HOOK_RELEASE_KEY",
+        &hook_release_key,
+    );
 
     let flow = FlowJob {
         name: "parent".into(),
@@ -2694,7 +2707,13 @@ async fn test_queue_events_basic_flow() {
         .unwrap();
 
     queue
-        .add("test_job", TestJob { value: "hello".into() }, None)
+        .add(
+            "test_job",
+            TestJob {
+                value: "hello".into(),
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -2704,10 +2723,7 @@ async fn test_queue_events_basic_flow() {
         .concurrency(1)
         .build::<TestJob>();
 
-    let handle = worker
-        .start(|_job| async move { Ok(()) })
-        .await
-        .unwrap();
+    let handle = worker.start(|_job| async move { Ok(()) }).await.unwrap();
 
     // Collect events until we see Completed (max 10s)
     let mut events = Vec::new();
@@ -2733,9 +2749,15 @@ async fn test_queue_events_basic_flow() {
 
     // Verify we got the key lifecycle events
     assert!(events.iter().any(|e| matches!(e, QueueEvent::Added { .. })));
-    assert!(events.iter().any(|e| matches!(e, QueueEvent::Waiting { .. })));
-    assert!(events.iter().any(|e| matches!(e, QueueEvent::Active { .. })));
-    assert!(events.iter().any(|e| matches!(e, QueueEvent::Completed { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, QueueEvent::Waiting { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, QueueEvent::Active { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, QueueEvent::Completed { .. })));
 
     handle.shutdown();
     handle.wait().await.unwrap();
@@ -2770,7 +2792,10 @@ async fn test_queue_events_producer() {
         .unwrap();
 
     producer
-        .publish("my_custom_event", &[("jobId", "99"), ("status", "exported")])
+        .publish(
+            "my_custom_event",
+            &[("jobId", "99"), ("status", "exported")],
+        )
         .await
         .unwrap();
 
@@ -2832,8 +2857,14 @@ async fn test_queue_events_multiple_subscribers() {
         .unwrap();
 
     let timeout = Duration::from_secs(5);
-    let (e1, _) = tokio::time::timeout(timeout, rx1.recv()).await.unwrap().unwrap();
-    let (e2, _) = tokio::time::timeout(timeout, rx2.recv()).await.unwrap().unwrap();
+    let (e1, _) = tokio::time::timeout(timeout, rx1.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let (e2, _) = tokio::time::timeout(timeout, rx2.recv())
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(e1, e2);
 
@@ -2966,10 +2997,7 @@ async fn test_wait_until_finished_success() {
         .concurrency(1)
         .build::<String>();
 
-    let handle = worker
-        .start(|_job| async move { Ok(()) })
-        .await
-        .unwrap();
+    let handle = worker.start(|_job| async move { Ok(()) }).await.unwrap();
 
     let result = job
         .wait_until_finished(&qe, Some(Duration::from_secs(10)))
@@ -3010,7 +3038,10 @@ async fn test_wait_until_finished_timeout() {
         delay: Some(Duration::from_secs(3600)),
         ..Default::default()
     };
-    let job = queue.add("test", "data".to_string(), Some(opts)).await.unwrap();
+    let job = queue
+        .add("test", "data".to_string(), Some(opts))
+        .await
+        .unwrap();
 
     let result = job
         .wait_until_finished(&qe, Some(Duration::from_secs(1)))

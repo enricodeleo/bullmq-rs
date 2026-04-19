@@ -150,12 +150,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Queue<T> {
     /// - otherwise uses `addStandardJob`
     ///
     /// Returns the created job with its assigned ID.
-    pub async fn add(
-        &self,
-        name: &str,
-        data: T,
-        opts: Option<JobOptions>,
-    ) -> BullmqResult<Job<T>> {
+    pub async fn add(&self, name: &str, data: T, opts: Option<JobOptions>) -> BullmqResult<Job<T>> {
         let mut conn = self.conn.clone();
 
         // Generate job ID: custom if provided, otherwise INCR the id counter.
@@ -635,11 +630,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Queue<T> {
     /// Add a log entry to a job's log list.
     ///
     /// Returns the current log count after insertion.
-    pub async fn add_log(
-        &self,
-        job_id: &str,
-        log_line: &str,
-    ) -> BullmqResult<u64> {
+    pub async fn add_log(&self, job_id: &str, log_line: &str) -> BullmqResult<u64> {
         let mut conn = self.conn.clone();
         add_log::add_log(
             &self.scripts,
@@ -658,12 +649,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Queue<T> {
     ///
     /// Returns log lines from `start` to `end` (inclusive, 0-based).
     /// Use `start=0, end=-1` to get all logs.
-    pub async fn get_logs(
-        &self,
-        job_id: &str,
-        start: i64,
-        end: i64,
-    ) -> BullmqResult<Vec<String>> {
+    pub async fn get_logs(&self, job_id: &str, start: i64, end: i64) -> BullmqResult<Vec<String>> {
         let mut conn = self.conn.clone();
         let job_key = self.key(job_id);
         let logs_key = format!("{}:logs", job_key);

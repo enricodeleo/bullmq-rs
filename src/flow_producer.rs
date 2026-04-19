@@ -45,6 +45,12 @@ pub struct FlowNode<T = serde_json::Value> {
     pub children: Vec<FlowNode<T>>,
 }
 
+impl Default for FlowProducerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FlowProducerBuilder {
     /// Create a new flow producer builder.
     pub fn new() -> Self {
@@ -127,7 +133,9 @@ impl FlowProducer {
         }
         maybe_watch_window_hook(&mut conn, &root_queue).await?;
 
-        redis::cmd("MULTI").query_async::<redis::Value>(&mut conn).await?;
+        redis::cmd("MULTI")
+            .query_async::<redis::Value>(&mut conn)
+            .await?;
         let queue_result = queue_insert(&self.scripts, &mut conn, &prepared).await;
         if let Err(err) = queue_result {
             let _ = redis::cmd("DISCARD")
@@ -359,8 +367,9 @@ async fn maybe_watch_window_hook(
         Ok(value) => value,
         Err(_) => return Ok(()),
     };
-    let release_key = std::env::var("BULLMQ_RS_FLOW_ADD_WATCH_HOOK_RELEASE_KEY")
-        .map_err(|_| BullmqError::Other("Missing BULLMQ_RS_FLOW_ADD_WATCH_HOOK_RELEASE_KEY".into()))?;
+    let release_key = std::env::var("BULLMQ_RS_FLOW_ADD_WATCH_HOOK_RELEASE_KEY").map_err(|_| {
+        BullmqError::Other("Missing BULLMQ_RS_FLOW_ADD_WATCH_HOOK_RELEASE_KEY".into())
+    })?;
 
     redis::cmd("SET")
         .arg(&open_key)
@@ -403,10 +412,7 @@ where
 {
     Box::pin(async move {
         if node.children.is_empty() {
-            let parent = node
-                .parent_key
-                .as_deref()
-                .zip(node.parent_data.as_deref());
+            let parent = node.parent_key.as_deref().zip(node.parent_data.as_deref());
 
             if node.delay_ms > 0 {
                 add_delayed_job_with_parent(
@@ -474,11 +480,7 @@ where
         let parent_ref = parent
             .as_ref()
             .map(|(dependencies_key, parent_key, parent_data)| {
-                (
-                    dependencies_key.as_str(),
-                    *parent_key,
-                    *parent_data,
-                )
+                (dependencies_key.as_str(), *parent_key, *parent_data)
             });
 
         add_parent_job(
@@ -521,12 +523,7 @@ fn build_flow_node<T>(
 where
     T: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
-    let mut job = Job::new(
-        node.id.clone(),
-        node.name,
-        node.data,
-        Some(node.opts),
-    );
+    let mut job = Job::new(node.id.clone(), node.name, node.data, Some(node.opts));
     job.timestamp = node.timestamp;
     job.state = if !node.children.is_empty() {
         JobState::WaitingChildren
